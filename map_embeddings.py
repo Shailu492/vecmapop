@@ -23,6 +23,14 @@ import re
 import sys
 import time
 
+# Additional imports
+import scipy.linalg
+import theano.tensor as TT
+from theano import shared
+from pymanopt import Problem
+from pymanopt.manifolds import Stiefel, Product, PositiveDefinite, Euclidean
+from pymanopt.solvers import ConjugateGradient, TrustRegions
+
 
 def dropout(m, p):
     if p <= 0.0:
@@ -108,6 +116,13 @@ def main():
     self_learning_group.add_argument('--stochastic_interval', default=50, type=int, help='stochastic dictionary induction interval (defaults to 50)')
     self_learning_group.add_argument('--log', help='write to a log file in tsv format at each iteration')
     self_learning_group.add_argument('-v', '--verbose', action='store_true', help='write log information to stderr at each iteration')
+
+    geomm_group = parser.add_argument_group('GeoMM arguments', 'Arguments for GeoMM method')
+    geomm_group.add_argument('--geomm', action='store_true', help='use geomm method for optimizing')
+    geomm_group.add_argument('--l2_reg', type=float,default=1e2, help='Lambda for L2 Regularization')
+    geomm_group.add_argument('--max_opt_time', type=int,default=5000, help='Maximum time limit for optimization in seconds')
+    geomm_group.add_argument('--max_opt_iter', type=int,default=150, help='Maximum number of iterations for optimization')
+
     args = parser.parse_args()
 
     if args.supervised is not None:
@@ -305,11 +320,65 @@ def main():
                 xw = xw.dot(wx1)
                 zw = zw.dot(wz1)
 
-            # STEP 2: Orthogonal mapping
-            wx2, s, wz2_t = xp.linalg.svd(xw[src_indices].T.dot(zw[trg_indices]))
-            wz2 = wz2_t.T
-            xw = xw.dot(wx2)
-            zw = zw.dot(wz2)
+            # STEP 2:
+            if not args.geomm:
+                # Orthogonal mapping
+                wx2, s, wz2_t = xp.linalg.svd(xw[src_indices].T.dot(zw[trg_indices]))
+                wz2 = wz2_t.T
+                xw = xw.dot(wx2)
+                zw = zw.dot(wz2)
+            else:
+                # GEOMM
+
+                # Init.
+                x_count = len(set(src_indices))
+                z_count = len(set(trg_indices))
+                A = np.zeros((x_count,z_count))
+
+                # Creating a dictionary matrix from a training set.
+                map_dict_src = {}
+                map_dict_trg = {}
+                I = 0
+                uniq_src = []
+                uniq_trg = []
+                for i in range(len(src_indices)):
+                    if src_indices[i] not in map_dict_src.keys():
+                        map_dict_src[src_indices[i]] = I
+                        I += 1
+                        uniq_src.append(src_indices[i])
+                J = 0
+                for j in range(len(trg_indices)):
+                    if trg_indices[j] not in map_dict_trg.keys():
+                        map_dict_trg[trg_indices[j]] = J
+                        J += 1
+                        uniq_trg.append(trg_indices[j])
+
+                for i in range(len(src_indices)):
+                    A[map_dict_src[src_indices[i]], map_dict_trg[trg_indices[i]]] = 1
+
+                #np.random.seed(0)
+                Lambda = args.l2_reg
+
+                U1 = TT.matrix()
+                U2 = TT.matrix()
+                B = TT.matrix()
+
+                cost = TT.sum(((shared(xw[uniq_src]).dot(U1.dot(B.dot(U2.T)))).dot(shared(zw[uniq_trg]).T)-A)**2) + 0.5*Lambda*(TT.sum(B**2))
+
+                solver = ConjugateGradient(maxtime=args.max_opt_time, maxiter=args.max_opt_iter)
+
+                manifold = Product([Stiefel(x.shape[1], x.shape[1]), Stiefel(z.shape[1], x.shape[1]), PositiveDefinite(x.shape[1])])
+                problem = Problem(manifold=manifold, cost=cost, arg=[U1, U2, B], verbosity=3)
+                wopt = solver.solve(problem)
+
+                w = wopt
+                U1 = w[0]
+                U2 = w[1]
+                B = w[2]
+
+                # Transformation
+                xw = x.dot(U1).dot(scipy.linalg.sqrtm(B))
+                zw = z.dot(U2).dot(scipy.linalg.sqrtm(B))
 
             # STEP 3: Re-weighting
             xw *= s**args.src_reweight
