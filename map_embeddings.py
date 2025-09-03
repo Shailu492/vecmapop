@@ -367,7 +367,7 @@ def main():
 
                 solver = ConjugateGradient(maxtime=args.max_opt_time, maxiter=args.max_opt_iter)
 
-                manifold = Product([Stiefel(x.shape[1], x.shape[1]), Stiefel(z.shape[1], x.shape[1]), PositiveDefinite(x.shape[1])])
+                manifold = Product([Stiefel(xw.shape[1], xw.shape[1]), Stiefel(zw.shape[1], xw.shape[1]), PositiveDefinite(xw.shape[1])])
                 problem = Problem(manifold=manifold, cost=cost, arg=[U1, U2, B], verbosity=3)
                 wopt = solver.solve(problem)
 
@@ -377,8 +377,8 @@ def main():
                 B = w[2]
 
                 # Transformation
-                xw = x.dot(U1).dot(scipy.linalg.sqrtm(B))
-                zw = z.dot(U2).dot(scipy.linalg.sqrtm(B))
+                xw = xw.dot(U1).dot(scipy.linalg.sqrtm(B))
+                zw = zw.dot(U2).dot(scipy.linalg.sqrtm(B))
 
             # STEP 3: Re-weighting
             xw *= s**args.src_reweight
