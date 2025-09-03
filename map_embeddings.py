@@ -371,10 +371,10 @@ def main():
                 problem = Problem(manifold=manifold, cost=cost, arg=[U1, U2, B], verbosity=3)
                 wopt = solver.solve(problem)
 
-                w = wopt
-                U1 = w[0]
-                U2 = w[1]
-                B = w[2]
+                #w = wopt
+                U1 = wopt[0]
+                U2 = wopt[1]
+                B = wopt[2]
 
                 # Transformation
                 xw = xw.dot(U1).dot(scipy.linalg.sqrtm(B))
