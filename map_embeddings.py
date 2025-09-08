@@ -30,6 +30,15 @@ from theano import shared
 from pymanopt import Problem
 from pymanopt.manifolds import Stiefel, Product, PositiveDefinite, Euclidean
 from pymanopt.solvers import ConjugateGradient, TrustRegions
+import os
+
+os.environ['PYTHONIOENCODING'] = 'utf-8'
+os.environ['THEANO_FLAGS'] = 'mode=FAST_COMPILE,device=cpu,floatX=float32'
+
+import theano
+theano.config.mode = 'FAST_COMPILE'
+theano.config.optimizer = 'fast_compile'
+theano.config.exception_verbosity = 'high'
 
 
 def dropout(m, p):
@@ -284,6 +293,7 @@ def main():
     keep_prob = args.stochastic_initial
     t = time.time()
     end = not args.self_learning
+    opt_it = 1
     while True:
 
         # Increase the keep probability if we have not improve in args.stochastic_interval iterations
@@ -329,10 +339,25 @@ def main():
                 zw = zw.dot(wz2)
             else:
                 # GEOMM
+                print(f'Running Geomm iter [{opt_it}]')
+                opt_it = opt_it + 1
 
                 # Init.
-                x_count = len(set(src_indices))
-                z_count = len(set(trg_indices))
+                # x_count = len(set(src_indices))
+                # z_count = len(set(trg_indices))
+
+                # DEBUG!
+                # print(f"src_indices type: {type(src_indices)}")
+                # print(f"src_indices shape: {getattr(src_indices, 'shape', 'No shape')}")
+                # print(f"src_indices dtype: {getattr(src_indices, 'dtype', 'No dtype')}")
+                # print(f"First element type: {type(src_indices[0]) if len(src_indices) > 0 else 'Empty'}")
+                # print(f"First element: {src_indices[0] if len(src_indices) > 0 else 'Empty'}")
+
+                cpu_src_indices = src_indices.get().tolist()
+                cpu_trg_indices = trg_indices.get().tolist()
+
+                x_count = len(set(cpu_src_indices))
+                z_count = len(set(cpu_trg_indices))
                 A = np.zeros((x_count,z_count))
 
                 # Creating a dictionary matrix from a training set.
@@ -341,20 +366,20 @@ def main():
                 I = 0
                 uniq_src = []
                 uniq_trg = []
-                for i in range(len(src_indices)):
-                    if src_indices[i] not in map_dict_src.keys():
-                        map_dict_src[src_indices[i]] = I
+                for i in range(len(cpu_src_indices)):
+                    if cpu_src_indices[i] not in map_dict_src.keys():
+                        map_dict_src[cpu_src_indices[i]] = I
                         I += 1
-                        uniq_src.append(src_indices[i])
+                        uniq_src.append(cpu_src_indices[i])
                 J = 0
-                for j in range(len(trg_indices)):
-                    if trg_indices[j] not in map_dict_trg.keys():
-                        map_dict_trg[trg_indices[j]] = J
+                for j in range(len(cpu_trg_indices)):
+                    if cpu_trg_indices[j] not in map_dict_trg.keys():
+                        map_dict_trg[cpu_trg_indices[j]] = J
                         J += 1
-                        uniq_trg.append(trg_indices[j])
+                        uniq_trg.append(cpu_trg_indices[j])
 
-                for i in range(len(src_indices)):
-                    A[map_dict_src[src_indices[i]], map_dict_trg[trg_indices[i]]] = 1
+                for i in range(len(cpu_src_indices)):
+                    A[map_dict_src[cpu_src_indices[i]], map_dict_trg[cpu_trg_indices[i]]] = 1
 
                 #np.random.seed(0)
                 Lambda = args.l2_reg
@@ -363,7 +388,20 @@ def main():
                 U2 = TT.matrix()
                 B = TT.matrix()
 
-                cost = TT.sum(((shared(xw[uniq_src]).dot(U1.dot(B.dot(U2.T)))).dot(shared(zw[uniq_trg]).T)-A)**2) + 0.5*Lambda*(TT.sum(B**2))
+                #cost1 = TT.sum(((shared(xw[uniq_src]).dot(U1.dot(B.dot(U2.T)))).dot(shared(zw[uniq_trg]).T)-A)**2) + 0.5*Lambda*(TT.sum(B**2))
+
+                x_shared = shared(xp.asnumpy(xw[uniq_src]))
+                z_shared = shared(xp.asnumpy(zw[uniq_trg]))
+
+                cost = TT.sum((
+                    TT.dot(
+                        TT.dot(
+                            x_shared,
+                            TT.dot(
+                                U1,
+                                TT.dot(B, U2.T))),
+                        z_shared.T)
+                    - A) ** 2) + 0.5 * Lambda * (TT.sum(B ** 2))
 
                 solver = ConjugateGradient(maxtime=args.max_opt_time, maxiter=args.max_opt_iter)
 
@@ -376,9 +414,20 @@ def main():
                 U2 = wopt[1]
                 B = wopt[2]
 
+                xp_U1 = xp.asarray(U1)
+                xp_U2 = xp.asarray(U2)
+                xp_B = xp.asarray(B)
+
+                xp_sqrtm_B = xp.asarray(scipy.linalg.sqrtm(B))
+
+                # Debug: check types
+                print(f"xw type: {type(xw)}")
+                print(f"np_U1 type: {type(xp_U1)}")
+                print(f"np_sqrtm_B type: {type(xp_sqrtm_B)}")
+
                 # Transformation
-                xw = xw.dot(U1).dot(scipy.linalg.sqrtm(B))
-                zw = zw.dot(U2).dot(scipy.linalg.sqrtm(B))
+                xw = xw.dot(xp_U1).dot(xp_sqrtm_B)
+                zw = zw.dot(xp_U2).dot(xp_sqrtm_B)
 
             # STEP 3: Re-weighting
             xw *= s**args.src_reweight
