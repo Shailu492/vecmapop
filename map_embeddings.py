@@ -113,11 +113,12 @@ def main():
     mapping_group.add_argument('--trg_dewhiten', choices=['src', 'trg'], help='de-whiten the target language embeddings')
     mapping_group.add_argument('--dim_reduction', type=int, default=0, help='apply dimensionality reduction')
 
-    # New
-    mapping_group.add_argument('-ns', '--new_space', action='store_true', help='if orthogonal constrained, mapping is to a new space')
-    mapping_group.add_argument('--l2_reg', type=float, default=1e2, help='Lambda for L2 Regularization')
-    mapping_group.add_argument('--max_opt_time', type=int,default=5000, help='Maximum time limit for optimization in seconds')
-    mapping_group.add_argument('--max_opt_iter', type=int,default=150, help='Maximum number of iterations for optimization')
+    # GEOMM
+    geomm_group = parser.add_argument_group('Additional for geomm','Additional for geomm')
+    geomm_group.add_argument('-ns', '--new_space', action='store_true', help='if orthogonal constrained, mapping is to a new space')
+    geomm_group.add_argument('--l2_reg', type=float, default=1e2, help='Lambda for L2 Regularization')
+    geomm_group.add_argument('--max_opt_time', type=int,default=5000, help='Maximum time limit for optimization in seconds')
+    geomm_group.add_argument('--max_opt_iter', type=int,default=150, help='Maximum number of iterations for optimization')
     #
 
     mapping_type = mapping_group.add_mutually_exclusive_group()
@@ -186,6 +187,7 @@ def main():
     else:
         xp = np
     xp.random.seed(args.seed)
+    np.random.seed(args.seed)
 
     # Build word to index map
     src_word2ind = {word: i for i, word in enumerate(src_words)}
@@ -313,10 +315,10 @@ def main():
         # Update the embedding mapping
         if args.orthogonal or not end:  # orthogonal mapping
             ### Orig
-            # u, s, vt = xp.linalg.svd(z[trg_indices].T.dot(x[src_indices]))
-            # w = vt.T.dot(u.T)
-            # x.dot(w, out=xw)
-            # zw[:] = z
+            u, s, vt = xp.linalg.svd(z[trg_indices].T.dot(x[src_indices]))
+            w = vt.T.dot(u.T)
+            x.dot(w, out=xw)
+            zw[:] = z
 
             ### A: double svd (with orig).
             # if args.new_space:
@@ -370,151 +372,7 @@ def main():
             # del Cx, Cy_inv, result, u, s, vt
 
             ### D: GEOMM
-
-            # Assume the following variables are already defined as NumPy arrays:
-            # x, z, A, uniq_src, uniq_trg, Lambda, args
-
-            print(f'Source indices length : {len(src_indices)}')
-
-            # x_count = len(src_indices)
-            # z_count = len(trg_indices)
-            # A = np.zeros((x_count, z_count))
-
-            # Creating dictionary matrix from training set
-            # map_dict_src = {}
-            # map_dict_trg = {}
-            # I = 0
-            # uniq_src = []
-            # uniq_trg = []
-            # for i in range(len(src_indices)):
-            #     if src_indices[i] not in map_dict_src.keys():
-            #         map_dict_src[src_indices[i]] = I
-            #         I += 1
-            #         uniq_src.append(src_indices[i])
-            # J = 0
-            # for j in range(len(trg_indices)):
-            #     if trg_indices[j] not in map_dict_trg.keys():
-            #         map_dict_trg[trg_indices[j]] = J
-            #         J += 1
-            #         uniq_trg.append(trg_indices[j])
-            #
-            # for i in range(len(src_indices)):
-            #     A[map_dict_src[src_indices[i]], map_dict_trg[trg_indices[i]]] = 1
-
-            ###
-            # Assuming src_indices and trg_indices are lists or NumPy arrays
-            # If they are not already NumPy arrays, it's good practice to convert them
-            #src_indices = np.array(src_indices)
-            #trg_indices = np.array(trg_indices)
-
-            # 1. Find unique elements and their inverse indices in one step for both arrays.
-            # 'uniq_src' will be the unique elements sorted.
-            # 'src_map' will be an array the same size as src_indices, where each
-            # element is the new index of the corresponding item in uniq_src.
-            print(f'Before np.unique')
-            uniq_src, src_map = xp.unique(src_indices, return_inverse=True)
-            uniq_trg, trg_map = xp.unique(trg_indices, return_inverse=True)
-
-            # 2. Create the matrix A with the correct dimensions
-            # The dimensions are the number of unique source and target items.
-            numpy_A = np.zeros((len(uniq_src), len(uniq_trg)))
-
-            # 3. Populate the matrix using advanced (vectorized) indexing in a single operation.
-            # This is incredibly fast compared to a Python loop.
-            print(f'Before A construction')
-            numpy_A[src_map.get(), trg_map.get()] = 1
-
-            #A = xp.asarray(A)
-            # device = torch.device("cuda")
-            # A = torch.from_numpy(A).to(device)
-            uniq_src = xp.asarray(uniq_src)
-            uniq_trg = xp.asarray(uniq_trg)
-            ###
-
-            np.random.seed(0)
-            Lambda = args.l2_reg
-
-            # 1. Define the manifold (this part remains very similar)
-            print(f'Before manifold definition')
-            manifold = Product([
-                Stiefel(x.shape[1], x.shape[1]),
-                Stiefel(z.shape[1], x.shape[1]),
-                SymmetricPositiveDefinite(x.shape[1]) # used to be PositiveDefinite
-            ])
-
-            # 2. Define the cost as a standard Python function
-            # The decorator tells pymanopt to use autograd to compute gradients automatically
-            #@pymanopt.function.autograd(manifold)
-            @pymanopt.function.pytorch(manifold)
-            def cost(U1, U2, B):
-                """
-                Defines the cost function using standard NumPy-like operations.
-                The variables U1, U2, and B will be passed by the solver.
-                """
-
-                # U1 = xp.asarray(U1, dtype=dtype)
-                # U2 = xp.asarray(U2, dtype=dtype)
-                # B = xp.asarray(B, dtype=dtype)
-
-                # Slice the source and target data
-                x_src = x[uniq_src]
-                z_trg = z[uniq_trg]
-
-                # Also convert your index arrays
-                #device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-                x_src = torch.from_numpy(x_src.get()).to(B.device, dtype=torch.float64)
-                z_trg = torch.from_numpy(z_trg.get()).to(B.device, dtype=torch.float64)
-
-                A = torch.from_numpy(numpy_A).to(B.device, dtype=torch.float64)
-
-                # print("--- Debugging Variable Types and Devices ---")
-                #
-                # # Check the variables from your dataset
-                # print(f"x_src is a: {type(x_src)}")
-                # if hasattr(x_src, 'device'):
-                #     print(f" -> On device: {x_src.device}")
-                #
-                # print(f"z_trg is a: {type(z_trg)}")
-                # if hasattr(z_trg, 'device'):
-                #     print(f" -> On device: {z_trg.device}")
-                #
-                # # Check the variables from the optimizer
-                # print(f"U1 is a: {type(U1)}")
-                # if hasattr(U1, 'device'):
-                #     print(f" -> On device: {U1.device}")
-                #
-                # print("------------------------------------------")
-
-                # Reconstruct the affinity matrix using the variables
-                # Note: Using '@' for matrix multiplication is cleaner
-                reconstructed_A = (x_src @ U1 @ B @ U2.T) @ z_trg.T
-
-                # Calculate the two components of the cost
-                reconstruction_error = torch.sum((reconstructed_A - A) ** 2)
-                regularization_term = 0.5 * Lambda * torch.sum(B ** 2)
-
-                return reconstruction_error + regularization_term
-
-            # 3. Instantiate the pymanopt problem
-            # We pass the manifold and the cost function directly
-            print(f'Before pymanopt.Problem')
-            problem = pymanopt.Problem(manifold=manifold, cost=cost)
-
-            # 4. Define and run the solver (this part is unchanged)
-            print(f'Before ConjugateGradient')
-            solver = ConjugateGradient(max_time=args.max_opt_time, max_iterations=30) #max_iterations=args.max_opt_iter)
-            wopt = solver.run(problem)
-
-            # 5. Unpack the optimized weights
-            U1, U2, B = wopt.point
-
-            # Step 2: Transformation
-            sqrtm_B = xp.asarray(scipy.linalg.sqrtm(B), dtype=dtype)
-            U1 = xp.asarray(U1, dtype=dtype)
-            U2 = xp.asarray(U2, dtype=dtype)
-
-            xw = x.dot(U1).dot(sqrtm_B)
-            zw = z.dot(U2).dot(sqrtm_B)
+            #xw, zw, wx2, wz2 = opt_geomm(x, z, xw, zw, src_indices, trg_indices, xp, args, dtype)
 
         elif args.unconstrained:  # unconstrained mapping
             x_pseudoinv = xp.linalg.inv(x[src_indices].T.dot(x[src_indices])).dot(x[src_indices].T)
@@ -539,10 +397,13 @@ def main():
                 zw = zw.dot(wz1)
 
             # STEP 2: Orthogonal mapping
-            wx2, s, wz2_t = xp.linalg.svd(xw[src_indices].T.dot(zw[trg_indices]))
-            wz2 = wz2_t.T
-            xw = xw.dot(wx2)
-            zw = zw.dot(wz2)
+            # wx2, s, wz2_t = xp.linalg.svd(xw[src_indices].T.dot(zw[trg_indices]))
+            # wz2 = wz2_t.T
+            # xw = xw.dot(wx2)
+            # zw = zw.dot(wz2)
+
+            # GEOMM
+            xw, zw, wx2, wz2 = opt_geomm(x, z, xw, zw, src_indices, trg_indices, xp, args, dtype)
 
             # STEP 3: Re-weighting
             xw *= s**args.src_reweight
@@ -649,6 +510,95 @@ def main():
     embeddings.write(trg_words, zw, trgfile)
     srcfile.close()
     trgfile.close()
+
+
+def opt_geomm(x, z, xw, zw, src_indices, trg_indices, xp, args, dtype):
+
+    print(f'Source indices length : {len(src_indices)}')
+
+    # 1. Find unique elements and their inverse indices in one step for both arrays.
+    # 'uniq_src' will be the unique elements sorted.
+    # 'src_map' will be an array the same size as src_indices, where each
+    # element is the new index of the corresponding item in uniq_src.
+    print(f'Before np.unique')
+    np_uniq_src, np_src_map = xp.unique(src_indices, return_inverse=True)
+    np_uniq_trg, np_trg_map = xp.unique(trg_indices, return_inverse=True)
+
+    # 2. Create the matrix A with the correct dimensions
+    # The dimensions are the number of unique source and target items.
+    np_A = np.zeros((len(np_uniq_src), len(np_uniq_trg)))
+
+    # 3. Populate the matrix using advanced (vectorized) indexing in a single operation.
+    # This is incredibly fast compared to a Python loop.
+    print(f'Before A construction')
+    np_A[np_src_map.get(), np_trg_map.get()] = 1
+
+    # Slice the source and target data
+    xp_uniq_src = xp.asarray(np_uniq_src)
+    xp_uniq_trg = xp.asarray(np_uniq_trg)
+    xp_x_src = x[xp_uniq_src]
+    xp_z_trg = z[xp_uniq_trg]
+
+    Lambda = args.l2_reg
+
+    # 1. Define the manifold (this part remains very similar)
+    print(f'Before manifold definition')
+    manifold = Product([
+        Stiefel(x.shape[1], x.shape[1]),
+        Stiefel(z.shape[1], x.shape[1]),
+        SymmetricPositiveDefinite(x.shape[1])  # used to be PositiveDefinite
+    ])
+
+    # 2. Define the cost as a standard Python function
+    # The decorator tells pymanopt to use autograd to compute gradients automatically
+    # @pymanopt.function.autograd(manifold)
+    @pymanopt.function.pytorch(manifold)
+    def cost(U1, U2, B):
+        """
+        Defines the cost function using standard NumPy-like operations.
+        The variables U1, U2, and B will be passed by the solver.
+        """
+
+        # Move to pure torch.
+        x_src = torch.from_numpy(xp_x_src.get()).to(B.device, dtype=torch.float64)
+        z_trg = torch.from_numpy(xp_z_trg.get()).to(B.device, dtype=torch.float64)
+        A = torch.from_numpy(np_A).to(B.device, dtype=torch.float64)
+
+        # Reconstruct the affinity matrix using the variables.
+        # Note: Using '@' for matrix multiplication is cleaner
+        reconstructed_A = (x_src @ U1 @ B @ U2.T) @ z_trg.T
+
+        # Calculate the two components of the cost.
+        reconstruction_error = torch.sum((reconstructed_A - A) ** 2)
+        regularization_term = 0.5 * Lambda * torch.sum(B ** 2)
+
+        return reconstruction_error + regularization_term
+
+    # 3. Instantiate the pymanopt problem
+    # We pass the manifold and the cost function directly
+    print(f'Before pymanopt.Problem')
+    problem = pymanopt.Problem(manifold=manifold, cost=cost)
+
+    # 4. Define and run the solver (this part is unchanged)
+    print(f'Before ConjugateGradient')
+    solver = ConjugateGradient(max_time=args.max_opt_time, max_iterations=150)  # max_iterations=args.max_opt_iter)
+    wopt = solver.run(problem)
+
+    # 5. Unpack the optimized weights
+    U1, U2, B = wopt.point
+
+    # Step 2: Transformation
+    sqrtm_B = xp.asarray(scipy.linalg.sqrtm(B), dtype=dtype)
+    U1 = xp.asarray(U1, dtype=dtype)
+    U2 = xp.asarray(U2, dtype=dtype)
+
+    result_xw2 = U1.dot(sqrtm_B)
+    result_zw2 = U2.dot(sqrtm_B)
+
+    result_xw = x.dot(U1).dot(sqrtm_B)
+    result_zw = z.dot(U2).dot(sqrtm_B)
+
+    return result_xw, result_zw, result_xw2, result_zw2
 
 
 if __name__ == '__main__':
