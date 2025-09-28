@@ -12,6 +12,7 @@
 #
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
+import scipy
 
 import embeddings
 from cupy_utils import *
@@ -23,22 +24,13 @@ import re
 import sys
 import time
 
-# Additional imports
-import scipy.linalg
-import theano.tensor as TT
-from theano import shared
-from pymanopt import Problem
-from pymanopt.manifolds import Stiefel, Product, PositiveDefinite, Euclidean
-from pymanopt.solvers import ConjugateGradient, TrustRegions
-import os
+import torch
+import pymanopt
+#import pymanopt.autograd.numpy as np
+from pymanopt.manifolds import Stiefel, SymmetricPositiveDefinite, Product
+from pymanopt.optimizers import ConjugateGradient
 
-os.environ['PYTHONIOENCODING'] = 'utf-8'
-os.environ['THEANO_FLAGS'] = 'mode=FAST_COMPILE,device=cpu,floatX=float32'
-
-import theano
-theano.config.mode = 'FAST_COMPILE'
-theano.config.optimizer = 'fast_compile'
-theano.config.exception_verbosity = 'high'
+#from cca_zoo.linear import CCA
 
 
 def dropout(m, p):
@@ -67,6 +59,17 @@ def topk_mean(m, k, inplace=False):  # TODO Assuming that axis is 1
         m[ind0, ind1] = minimum
     return ans / k
 
+randomGenerator = np.random.default_rng()
+
+def Orthogonal(D1, D2):
+    #G = np.random.randn(D, D).astype('float32')
+    #G = np.random.Generator.standard_normal(size=(D, D)).astype(np.float32)
+    #G = np.random.Generator.standard_normal(size=(D, D), dtype=np.float64, out=None)
+
+    G = randomGenerator.standard_normal(size=(D1, D2), dtype=np.float32, out=None)
+    Q, _ = np.linalg.qr(G)
+
+    return Q
 
 def main():
     # Parse command line arguments
@@ -109,6 +112,14 @@ def main():
     mapping_group.add_argument('--src_dewhiten', choices=['src', 'trg'], help='de-whiten the source language embeddings')
     mapping_group.add_argument('--trg_dewhiten', choices=['src', 'trg'], help='de-whiten the target language embeddings')
     mapping_group.add_argument('--dim_reduction', type=int, default=0, help='apply dimensionality reduction')
+
+    # New
+    mapping_group.add_argument('-ns', '--new_space', action='store_true', help='if orthogonal constrained, mapping is to a new space')
+    mapping_group.add_argument('--l2_reg', type=float, default=1e2, help='Lambda for L2 Regularization')
+    mapping_group.add_argument('--max_opt_time', type=int,default=5000, help='Maximum time limit for optimization in seconds')
+    mapping_group.add_argument('--max_opt_iter', type=int,default=150, help='Maximum number of iterations for optimization')
+    #
+
     mapping_type = mapping_group.add_mutually_exclusive_group()
     mapping_type.add_argument('-c', '--orthogonal', action='store_true', help='use orthogonal constrained mapping')
     mapping_type.add_argument('-u', '--unconstrained', action='store_true', help='use unconstrained mapping')
@@ -125,13 +136,6 @@ def main():
     self_learning_group.add_argument('--stochastic_interval', default=50, type=int, help='stochastic dictionary induction interval (defaults to 50)')
     self_learning_group.add_argument('--log', help='write to a log file in tsv format at each iteration')
     self_learning_group.add_argument('-v', '--verbose', action='store_true', help='write log information to stderr at each iteration')
-
-    geomm_group = parser.add_argument_group('GeoMM arguments', 'Arguments for GeoMM method')
-    geomm_group.add_argument('--geomm', action='store_true', help='use geomm method for optimizing')
-    geomm_group.add_argument('--l2_reg', type=float,default=1e2, help='Lambda for L2 Regularization')
-    geomm_group.add_argument('--max_opt_time', type=int,default=5000, help='Maximum time limit for optimization in seconds')
-    geomm_group.add_argument('--max_opt_iter', type=int,default=150, help='Maximum number of iterations for optimization')
-
     args = parser.parse_args()
 
     if args.supervised is not None:
@@ -293,7 +297,10 @@ def main():
     keep_prob = args.stochastic_initial
     t = time.time()
     end = not args.self_learning
-    opt_it = 1
+
+    xw[:] = x
+    zw[:] = z
+
     while True:
 
         # Increase the keep probability if we have not improve in args.stochastic_interval iterations
@@ -305,10 +312,210 @@ def main():
 
         # Update the embedding mapping
         if args.orthogonal or not end:  # orthogonal mapping
-            u, s, vt = xp.linalg.svd(z[trg_indices].T.dot(x[src_indices]))
-            w = vt.T.dot(u.T)
-            x.dot(w, out=xw)
-            zw[:] = z
+            ### Orig
+            # u, s, vt = xp.linalg.svd(z[trg_indices].T.dot(x[src_indices]))
+            # w = vt.T.dot(u.T)
+            # x.dot(w, out=xw)
+            # zw[:] = z
+
+            ### A: double svd (with orig).
+            # if args.new_space:
+            #     u, s, vt = xp.linalg.svd(xw[src_indices].T.dot(z[trg_indices]))
+            #     w = vt.T.dot(u.T)
+            #     z.dot(w, out=zw)
+
+            ### B: random
+            # num_columns = xw.shape[1]
+            # ort1 = Orthogonal(num_columns, num_columns)
+            # ort1 = xp.asarray(ort1)
+            # zw = zw.dot(ort1)
+            # xw = xw.dot(ort1)
+            #
+            # u, s, vt = xp.linalg.svd(zw[trg_indices].T.dot(xw[src_indices]))
+            # w = vt.T.dot(u.T)
+            # xw.dot(w, out=xw)
+            #
+            # u, s, vt = xp.linalg.svd(xw[src_indices].T.dot(zw[trg_indices]))
+            # w = vt.T.dot(u.T)
+            # zw.dot(w, out=zw)
+
+            ### C: Canonical Correlation Analysis (CCA)
+            # print(f'len(src_indices):{len(src_indices)}')
+
+            # np_xw = xw.get()
+            # np_zw = zw.get()
+            #
+            # lcca = CCA(latent_dimensions=min(xw.shape[1], len(src_indices)))
+            # lcca.fit([xw[src_indices].get(), zw[src_indices].get()])
+            #
+            # # Transform embeddings
+            # np_xw, np_zw = lcca.transform([xw[src_indices].get(), zw[src_indices].get()])
+            #
+            # Cx = xp.asarray(np_xw, dtype=dtype)
+            # Cy = xp.asarray(np_zw, dtype=dtype)
+            #
+            # # Step 1: Invert the matrix Cy
+            # Cy_inv = xp.linalg.pinv(Cy)
+            #
+            # del np_xw, np_zw, Cy
+            #
+            # # Step 2: Multiply Cx by the inverse of Cy
+            # result = Cx.dot(Cy_inv)
+            #
+            # u, s, vt = xp.linalg.svd(result)
+            # w = vt.T.dot(u.T)
+            # x.dot(w, out=xw)
+            # zw[:] = z
+            #
+            # del Cx, Cy_inv, result, u, s, vt
+
+            ### D: GEOMM
+
+            # Assume the following variables are already defined as NumPy arrays:
+            # x, z, A, uniq_src, uniq_trg, Lambda, args
+
+            print(f'Source indices length : {len(src_indices)}')
+
+            # x_count = len(src_indices)
+            # z_count = len(trg_indices)
+            # A = np.zeros((x_count, z_count))
+
+            # Creating dictionary matrix from training set
+            # map_dict_src = {}
+            # map_dict_trg = {}
+            # I = 0
+            # uniq_src = []
+            # uniq_trg = []
+            # for i in range(len(src_indices)):
+            #     if src_indices[i] not in map_dict_src.keys():
+            #         map_dict_src[src_indices[i]] = I
+            #         I += 1
+            #         uniq_src.append(src_indices[i])
+            # J = 0
+            # for j in range(len(trg_indices)):
+            #     if trg_indices[j] not in map_dict_trg.keys():
+            #         map_dict_trg[trg_indices[j]] = J
+            #         J += 1
+            #         uniq_trg.append(trg_indices[j])
+            #
+            # for i in range(len(src_indices)):
+            #     A[map_dict_src[src_indices[i]], map_dict_trg[trg_indices[i]]] = 1
+
+            ###
+            # Assuming src_indices and trg_indices are lists or NumPy arrays
+            # If they are not already NumPy arrays, it's good practice to convert them
+            #src_indices = np.array(src_indices)
+            #trg_indices = np.array(trg_indices)
+
+            # 1. Find unique elements and their inverse indices in one step for both arrays.
+            # 'uniq_src' will be the unique elements sorted.
+            # 'src_map' will be an array the same size as src_indices, where each
+            # element is the new index of the corresponding item in uniq_src.
+            print(f'Before np.unique')
+            uniq_src, src_map = xp.unique(src_indices, return_inverse=True)
+            uniq_trg, trg_map = xp.unique(trg_indices, return_inverse=True)
+
+            # 2. Create the matrix A with the correct dimensions
+            # The dimensions are the number of unique source and target items.
+            numpy_A = np.zeros((len(uniq_src), len(uniq_trg)))
+
+            # 3. Populate the matrix using advanced (vectorized) indexing in a single operation.
+            # This is incredibly fast compared to a Python loop.
+            print(f'Before A construction')
+            numpy_A[src_map.get(), trg_map.get()] = 1
+
+            #A = xp.asarray(A)
+            # device = torch.device("cuda")
+            # A = torch.from_numpy(A).to(device)
+            uniq_src = xp.asarray(uniq_src)
+            uniq_trg = xp.asarray(uniq_trg)
+            ###
+
+            np.random.seed(0)
+            Lambda = args.l2_reg
+
+            # 1. Define the manifold (this part remains very similar)
+            print(f'Before manifold definition')
+            manifold = Product([
+                Stiefel(x.shape[1], x.shape[1]),
+                Stiefel(z.shape[1], x.shape[1]),
+                SymmetricPositiveDefinite(x.shape[1]) # used to be PositiveDefinite
+            ])
+
+            # 2. Define the cost as a standard Python function
+            # The decorator tells pymanopt to use autograd to compute gradients automatically
+            #@pymanopt.function.autograd(manifold)
+            @pymanopt.function.pytorch(manifold)
+            def cost(U1, U2, B):
+                """
+                Defines the cost function using standard NumPy-like operations.
+                The variables U1, U2, and B will be passed by the solver.
+                """
+
+                # U1 = xp.asarray(U1, dtype=dtype)
+                # U2 = xp.asarray(U2, dtype=dtype)
+                # B = xp.asarray(B, dtype=dtype)
+
+                # Slice the source and target data
+                x_src = x[uniq_src]
+                z_trg = z[uniq_trg]
+
+                # Also convert your index arrays
+                #device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+                x_src = torch.from_numpy(x_src.get()).to(B.device, dtype=torch.float64)
+                z_trg = torch.from_numpy(z_trg.get()).to(B.device, dtype=torch.float64)
+
+                A = torch.from_numpy(numpy_A).to(B.device, dtype=torch.float64)
+
+                # print("--- Debugging Variable Types and Devices ---")
+                #
+                # # Check the variables from your dataset
+                # print(f"x_src is a: {type(x_src)}")
+                # if hasattr(x_src, 'device'):
+                #     print(f" -> On device: {x_src.device}")
+                #
+                # print(f"z_trg is a: {type(z_trg)}")
+                # if hasattr(z_trg, 'device'):
+                #     print(f" -> On device: {z_trg.device}")
+                #
+                # # Check the variables from the optimizer
+                # print(f"U1 is a: {type(U1)}")
+                # if hasattr(U1, 'device'):
+                #     print(f" -> On device: {U1.device}")
+                #
+                # print("------------------------------------------")
+
+                # Reconstruct the affinity matrix using the variables
+                # Note: Using '@' for matrix multiplication is cleaner
+                reconstructed_A = (x_src @ U1 @ B @ U2.T) @ z_trg.T
+
+                # Calculate the two components of the cost
+                reconstruction_error = torch.sum((reconstructed_A - A) ** 2)
+                regularization_term = 0.5 * Lambda * torch.sum(B ** 2)
+
+                return reconstruction_error + regularization_term
+
+            # 3. Instantiate the pymanopt problem
+            # We pass the manifold and the cost function directly
+            print(f'Before pymanopt.Problem')
+            problem = pymanopt.Problem(manifold=manifold, cost=cost)
+
+            # 4. Define and run the solver (this part is unchanged)
+            print(f'Before ConjugateGradient')
+            solver = ConjugateGradient(max_time=args.max_opt_time, max_iterations=30) #max_iterations=args.max_opt_iter)
+            wopt = solver.run(problem)
+
+            # 5. Unpack the optimized weights
+            U1, U2, B = wopt.point
+
+            # Step 2: Transformation
+            sqrtm_B = xp.asarray(scipy.linalg.sqrtm(B), dtype=dtype)
+            U1 = xp.asarray(U1, dtype=dtype)
+            U2 = xp.asarray(U2, dtype=dtype)
+
+            xw = x.dot(U1).dot(sqrtm_B)
+            zw = z.dot(U2).dot(sqrtm_B)
+
         elif args.unconstrained:  # unconstrained mapping
             x_pseudoinv = xp.linalg.inv(x[src_indices].T.dot(x[src_indices])).dot(x[src_indices].T)
             w = x_pseudoinv.dot(z[trg_indices])
@@ -316,6 +523,7 @@ def main():
             zw[:] = z
         else:  # advanced mapping
 
+            print("Running else!!!")
             # TODO xw.dot(wx2, out=xw) and alike not working
             xw[:] = x
             zw[:] = z
@@ -330,104 +538,11 @@ def main():
                 xw = xw.dot(wx1)
                 zw = zw.dot(wz1)
 
-            # STEP 2:
-            if not args.geomm:
-                # Orthogonal mapping
-                wx2, s, wz2_t = xp.linalg.svd(xw[src_indices].T.dot(zw[trg_indices]))
-                wz2 = wz2_t.T
-                xw = xw.dot(wx2)
-                zw = zw.dot(wz2)
-            else:
-                # GEOMM
-                print(f'Running Geomm iter [{opt_it}]')
-                opt_it = opt_it + 1
-
-                # Init.
-                # x_count = len(set(src_indices))
-                # z_count = len(set(trg_indices))
-
-                # DEBUG!
-                # print(f"src_indices type: {type(src_indices)}")
-                # print(f"src_indices shape: {getattr(src_indices, 'shape', 'No shape')}")
-                # print(f"src_indices dtype: {getattr(src_indices, 'dtype', 'No dtype')}")
-                # print(f"First element type: {type(src_indices[0]) if len(src_indices) > 0 else 'Empty'}")
-                # print(f"First element: {src_indices[0] if len(src_indices) > 0 else 'Empty'}")
-
-                cpu_src_indices = src_indices.get().tolist()
-                cpu_trg_indices = trg_indices.get().tolist()
-
-                x_count = len(set(cpu_src_indices))
-                z_count = len(set(cpu_trg_indices))
-                A = np.zeros((x_count,z_count))
-
-                # Creating a dictionary matrix from a training set.
-                map_dict_src = {}
-                map_dict_trg = {}
-                I = 0
-                uniq_src = []
-                uniq_trg = []
-                for i in range(len(cpu_src_indices)):
-                    if cpu_src_indices[i] not in map_dict_src.keys():
-                        map_dict_src[cpu_src_indices[i]] = I
-                        I += 1
-                        uniq_src.append(cpu_src_indices[i])
-                J = 0
-                for j in range(len(cpu_trg_indices)):
-                    if cpu_trg_indices[j] not in map_dict_trg.keys():
-                        map_dict_trg[cpu_trg_indices[j]] = J
-                        J += 1
-                        uniq_trg.append(cpu_trg_indices[j])
-
-                for i in range(len(cpu_src_indices)):
-                    A[map_dict_src[cpu_src_indices[i]], map_dict_trg[cpu_trg_indices[i]]] = 1
-
-                #np.random.seed(0)
-                Lambda = args.l2_reg
-
-                U1 = TT.matrix()
-                U2 = TT.matrix()
-                B = TT.matrix()
-
-                #cost1 = TT.sum(((shared(xw[uniq_src]).dot(U1.dot(B.dot(U2.T)))).dot(shared(zw[uniq_trg]).T)-A)**2) + 0.5*Lambda*(TT.sum(B**2))
-
-                x_shared = shared(xp.asnumpy(xw[uniq_src]))
-                z_shared = shared(xp.asnumpy(zw[uniq_trg]))
-
-                cost = TT.sum((
-                    TT.dot(
-                        TT.dot(
-                            x_shared,
-                            TT.dot(
-                                U1,
-                                TT.dot(B, U2.T))),
-                        z_shared.T)
-                    - A) ** 2) + 0.5 * Lambda * (TT.sum(B ** 2))
-
-                solver = ConjugateGradient(maxtime=args.max_opt_time, maxiter=args.max_opt_iter)
-
-                manifold = Product([Stiefel(xw.shape[1], xw.shape[1]), Stiefel(zw.shape[1], xw.shape[1]), PositiveDefinite(xw.shape[1])])
-                problem = Problem(manifold=manifold, cost=cost, arg=[U1, U2, B], verbosity=3)
-                wopt = solver.solve(problem)
-
-                #w = wopt
-                U1 = wopt[0]
-                U2 = wopt[1]
-                B = wopt[2]
-
-                xp_U1 = xp.asarray(U1)
-                xp_U2 = xp.asarray(U2)
-                xp_B = xp.asarray(B)
-
-                xp_sqrtm_B = xp.asarray(scipy.linalg.sqrtm(B))
-
-                # Debug: check types
-                print(f"xw type: {type(xw)}")
-                print(f"np_U1 type: {type(xp_U1)}")
-                print(f"np_sqrtm_B type: {type(xp_sqrtm_B)}")
-
-                # Transformation
-                xw = xw.dot(xp_U1).dot(xp_sqrtm_B)
-                zw = zw.dot(xp_U2).dot(xp_sqrtm_B)
+            # STEP 2: Orthogonal mapping
+            wx2, s, wz2_t = xp.linalg.svd(xw[src_indices].T.dot(zw[trg_indices]))
+            wz2 = wz2_t.T
+            xw = xw.dot(wx2)
+            zw = zw.dot(wz2)
 
             # STEP 3: Re-weighting
             xw *= s**args.src_reweight
