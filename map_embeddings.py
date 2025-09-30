@@ -119,6 +119,7 @@ def main():
     geomm_group.add_argument('--l2_reg', type=float, default=1e2, help='Lambda for L2 Regularization')
     geomm_group.add_argument('--max_opt_time', type=int,default=5000, help='Maximum time limit for optimization in seconds')
     geomm_group.add_argument('--max_opt_iter', type=int,default=150, help='Maximum number of iterations for optimization')
+    geomm_group.add_argument('--no_whiten', action='store_true', help='force no-whiten the embeddings')
     #
 
     mapping_type = mapping_group.add_mutually_exclusive_group()
@@ -156,6 +157,16 @@ def main():
     if args.emnlp2016:
         parser.set_defaults(init_dictionary=args.emnlp2016, orthogonal=True, normalize=['unit', 'center'], batch_size=1000)
     args = parser.parse_args()
+
+    if args.no_whiten:
+        args.whiten = False
+        args.src_dewhiten = None
+        args.trg_dewhiten = None
+
+
+    print(f'args.whiten : {args.whiten}')
+    print(f'args.src_dewhiten : {args.src_dewhiten}')
+    print(f'args.trg_dewhiten : {args.trg_dewhiten}')
 
     # Check command line arguments
     if (args.src_dewhiten is not None or args.trg_dewhiten is not None) and not args.whiten:
@@ -371,7 +382,10 @@ def main():
             #
             # del Cx, Cy_inv, result, u, s, vt
 
-            ### D: GEOMM
+            #geomm_like_A = get_geomm_like_A(src_indices.get(), trg_indices.get())
+            #print(geomm_like_A)
+
+            # GEOMM
             #xw, zw, wx2, wz2 = opt_geomm(x, z, xw, zw, src_indices, trg_indices, xp, args, dtype)
 
         elif args.unconstrained:  # unconstrained mapping
@@ -403,7 +417,7 @@ def main():
             # zw = zw.dot(wz2)
 
             # GEOMM
-            xw, zw, wx2, wz2 = opt_geomm(x, z, xw, zw, src_indices, trg_indices, xp, args, dtype)
+            xw, zw, wx2, wz2 = opt_geomm(xw, zw, xw, zw, src_indices, trg_indices, xp, args, dtype)
 
             # STEP 3: Re-weighting
             xw *= s**args.src_reweight
@@ -512,9 +526,40 @@ def main():
     trgfile.close()
 
 
+def get_geomm_like_A(src_indices, trg_indices):
+
+    x_count = len(src_indices)
+    z_count = len(trg_indices)
+    A = np.zeros((x_count, z_count))
+
+    # Creating dictionary matrix from training set
+    map_dict_src = {}
+    map_dict_trg = {}
+    I = 0
+    uniq_src = []
+    uniq_trg = []
+    for i in range(len(src_indices)):
+        if src_indices[i] not in map_dict_src.keys():
+            map_dict_src[src_indices[i]] = I
+            I += 1
+            uniq_src.append(src_indices[i])
+    J = 0
+    for j in range(len(trg_indices)):
+        if trg_indices[j] not in map_dict_trg.keys():
+            map_dict_trg[trg_indices[j]] = J
+            J += 1
+            uniq_trg.append(trg_indices[j])
+
+    for i in range(len(src_indices)):
+        A[map_dict_src[src_indices[i]], map_dict_trg[trg_indices[i]]] = 1
+
+    return A
+
+
 def opt_geomm(x, z, xw, zw, src_indices, trg_indices, xp, args, dtype):
 
-    print(f'Source indices length : {len(src_indices)}')
+    print(f'Source indices length : {len(src_indices)},{len(trg_indices)}')
+    start = time.time()
 
     # 1. Find unique elements and their inverse indices in one step for both arrays.
     # 'uniq_src' will be the unique elements sorted.
@@ -527,11 +572,14 @@ def opt_geomm(x, z, xw, zw, src_indices, trg_indices, xp, args, dtype):
     # 2. Create the matrix A with the correct dimensions
     # The dimensions are the number of unique source and target items.
     np_A = np.zeros((len(np_uniq_src), len(np_uniq_trg)))
+    ##np_A = np.zeros((len(src_indices), len(trg_indices)))
 
     # 3. Populate the matrix using advanced (vectorized) indexing in a single operation.
     # This is incredibly fast compared to a Python loop.
     print(f'Before A construction')
-    np_A[np_src_map.get(), np_trg_map.get()] = 1
+    ##np_A[np_src_map.get(), np_trg_map.get()] = 1
+    ##np_A[src_indices.get(), trg_indices.get()] = 1
+    np_A = get_geomm_like_A(src_indices.get(), trg_indices.get())
 
     # Slice the source and target data
     xp_uniq_src = xp.asarray(np_uniq_src)
@@ -581,7 +629,7 @@ def opt_geomm(x, z, xw, zw, src_indices, trg_indices, xp, args, dtype):
 
     # 4. Define and run the solver (this part is unchanged)
     print(f'Before ConjugateGradient')
-    solver = ConjugateGradient(max_time=args.max_opt_time, max_iterations=150)  # max_iterations=args.max_opt_iter)
+    solver = ConjugateGradient(max_time=15000, max_iterations=150)  # max_iterations=args.max_opt_iter)
     wopt = solver.run(problem)
 
     # 5. Unpack the optimized weights
@@ -597,6 +645,9 @@ def opt_geomm(x, z, xw, zw, src_indices, trg_indices, xp, args, dtype):
 
     result_xw = x.dot(U1).dot(sqrtm_B)
     result_zw = z.dot(U2).dot(sqrtm_B)
+
+    end = time.time()
+    print(f"Geomm runtime: {end - start} seconds")
 
     return result_xw, result_zw, result_xw2, result_zw2
 
