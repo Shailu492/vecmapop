@@ -68,6 +68,8 @@ def main():
     elif args.precision == 'fp64':
         dtype = 'float64'
 
+    print(f'args.dot : {args.dot}')
+
     # Read input embeddings
     srcfile = open(args.src_embeddings, encoding=args.encoding, errors='surrogateescape')
     trgfile = open(args.trg_embeddings, encoding=args.encoding, errors='surrogateescape')
@@ -88,6 +90,7 @@ def main():
 
     # Length normalize embeddings so their dot product effectively computes the cosine similarity
     if not args.dot:
+        print(f'embeddings.length_normalizing both embeddings')
         embeddings.length_normalize(x)
         embeddings.length_normalize(z)
 

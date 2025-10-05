@@ -163,10 +163,11 @@ def main():
         args.src_dewhiten = None
         args.trg_dewhiten = None
 
-
+    print(time.strftime("%H:%M:%S"))
     print(f'args.whiten : {args.whiten}')
     print(f'args.src_dewhiten : {args.src_dewhiten}')
     print(f'args.trg_dewhiten : {args.trg_dewhiten}')
+    print(f'args.direction : {args.direction}')
 
     # Check command line arguments
     if (args.src_dewhiten is not None or args.trg_dewhiten is not None) and not args.whiten:
@@ -389,6 +390,7 @@ def main():
             #xw, zw, wx2, wz2 = opt_geomm(x, z, xw, zw, src_indices, trg_indices, xp, args, dtype)
 
         elif args.unconstrained:  # unconstrained mapping
+            print(f"Running unconstrained:{args.unconstrained}")
             x_pseudoinv = xp.linalg.inv(x[src_indices].T.dot(x[src_indices])).dot(x[src_indices].T)
             w = x_pseudoinv.dot(z[trg_indices])
             x.dot(w, out=xw)
@@ -405,6 +407,7 @@ def main():
                 u, s, vt = xp.linalg.svd(m, full_matrices=False)
                 return vt.T.dot(xp.diag(1/s)).dot(vt)
             if args.whiten:
+                print(f"Running whiten:{args.whiten}")
                 wx1 = whitening_transformation(xw[src_indices])
                 wz1 = whitening_transformation(zw[trg_indices])
                 xw = xw.dot(wx1)
@@ -417,24 +420,29 @@ def main():
             # zw = zw.dot(wz2)
 
             # GEOMM
-            xw, zw, wx2, wz2 = opt_geomm(xw, zw, xw, zw, src_indices, trg_indices, xp, args, dtype)
+            xw, zw, wx2, wz2 = opt_geomm(x, z, xw, zw, src_indices, trg_indices, xp, args, dtype)
 
             # STEP 3: Re-weighting
-            xw *= s**args.src_reweight
-            zw *= s**args.trg_reweight
+            # xw *= s**args.src_reweight
+            # zw *= s**args.trg_reweight
 
             # STEP 4: De-whitening
             if args.src_dewhiten == 'src':
+                print(f"Running src_dewhiten:{args.src_dewhiten}")
                 xw = xw.dot(wx2.T.dot(xp.linalg.inv(wx1)).dot(wx2))
             elif args.src_dewhiten == 'trg':
+                print(f"Running src_dewhiten:{args.src_dewhiten}")
                 xw = xw.dot(wz2.T.dot(xp.linalg.inv(wz1)).dot(wz2))
             if args.trg_dewhiten == 'src':
+                print(f"Running trg_dewhiten:{args.trg_dewhiten}")
                 zw = zw.dot(wx2.T.dot(xp.linalg.inv(wx1)).dot(wx2))
             elif args.trg_dewhiten == 'trg':
+                print(f"Running trg_dewhiten:{args.trg_dewhiten}")
                 zw = zw.dot(wz2.T.dot(xp.linalg.inv(wz1)).dot(wz2))
 
             # STEP 5: Dimensionality reduction
             if args.dim_reduction > 0:
+                print(f"Running dim_reduction:{args.dim_reduction}")
                 xw = xw[:, :args.dim_reduction]
                 zw = zw[:, :args.dim_reduction]
 
@@ -528,8 +536,8 @@ def main():
 
 def get_geomm_like_A(src_indices, trg_indices):
 
-    x_count = len(src_indices)
-    z_count = len(trg_indices)
+    x_count = len(set(src_indices))
+    z_count = len(set(trg_indices))
     A = np.zeros((x_count, z_count))
 
     # Creating dictionary matrix from training set
@@ -553,7 +561,7 @@ def get_geomm_like_A(src_indices, trg_indices):
     for i in range(len(src_indices)):
         A[map_dict_src[src_indices[i]], map_dict_trg[trg_indices[i]]] = 1
 
-    return A
+    return A, uniq_src, uniq_trg
 
 
 def opt_geomm(x, z, xw, zw, src_indices, trg_indices, xp, args, dtype):
@@ -566,12 +574,12 @@ def opt_geomm(x, z, xw, zw, src_indices, trg_indices, xp, args, dtype):
     # 'src_map' will be an array the same size as src_indices, where each
     # element is the new index of the corresponding item in uniq_src.
     print(f'Before np.unique')
-    np_uniq_src, np_src_map = xp.unique(src_indices, return_inverse=True)
-    np_uniq_trg, np_trg_map = xp.unique(trg_indices, return_inverse=True)
+    # np_uniq_src, np_src_map = xp.unique(src_indices, return_inverse=True)
+    # np_uniq_trg, np_trg_map = xp.unique(trg_indices, return_inverse=True)
 
     # 2. Create the matrix A with the correct dimensions
     # The dimensions are the number of unique source and target items.
-    np_A = np.zeros((len(np_uniq_src), len(np_uniq_trg)))
+    # np_A = np.zeros((len(np_uniq_src), len(np_uniq_trg)))
     ##np_A = np.zeros((len(src_indices), len(trg_indices)))
 
     # 3. Populate the matrix using advanced (vectorized) indexing in a single operation.
@@ -579,13 +587,18 @@ def opt_geomm(x, z, xw, zw, src_indices, trg_indices, xp, args, dtype):
     print(f'Before A construction')
     ##np_A[np_src_map.get(), np_trg_map.get()] = 1
     ##np_A[src_indices.get(), trg_indices.get()] = 1
-    np_A = get_geomm_like_A(src_indices.get(), trg_indices.get())
+
+    # Using original method of GEOMM.
+    np_A, uniq_src, uniq_trg = get_geomm_like_A(src_indices.get(), trg_indices.get())
+    xp_x_src = x[uniq_src]
+    xp_z_trg = z[uniq_trg]
+    print(f'Shapes, np_A:{np_A.shape}, xp_x_src:{xp_x_src.shape}, xp_z_trg:{xp_z_trg.shape}')
 
     # Slice the source and target data
-    xp_uniq_src = xp.asarray(np_uniq_src)
-    xp_uniq_trg = xp.asarray(np_uniq_trg)
-    xp_x_src = x[xp_uniq_src]
-    xp_z_trg = z[xp_uniq_trg]
+    # xp_uniq_src = xp.asarray(np_uniq_src)
+    # xp_uniq_trg = xp.asarray(np_uniq_trg)
+    # xp_x_src = x[xp_uniq_src]
+    # xp_z_trg = z[xp_uniq_trg]
 
     Lambda = args.l2_reg
 
@@ -608,16 +621,18 @@ def opt_geomm(x, z, xw, zw, src_indices, trg_indices, xp, args, dtype):
         """
 
         # Move to pure torch.
-        x_src = torch.from_numpy(xp_x_src.get()).to(B.device, dtype=torch.float64)
-        z_trg = torch.from_numpy(xp_z_trg.get()).to(B.device, dtype=torch.float64)
-        A = torch.from_numpy(np_A).to(B.device, dtype=torch.float64)
+        cost_x_src = torch.from_numpy(xp_x_src.get()).to(B.device, dtype=torch.float64)
+        cost_z_trg = torch.from_numpy(xp_z_trg.get()).to(B.device, dtype=torch.float64)
+        cost_A = torch.from_numpy(np_A).to(B.device, dtype=torch.float64)
 
         # Reconstruct the affinity matrix using the variables.
         # Note: Using '@' for matrix multiplication is cleaner
-        reconstructed_A = (x_src @ U1 @ B @ U2.T) @ z_trg.T
+        reconstructed_A = (cost_x_src @ U1 @ B @ U2.T) @ cost_z_trg.T
+
+        #print(f'In cost, reconstructed_A: {reconstructed_A.shape}, A:{cost_A.shape}')
 
         # Calculate the two components of the cost.
-        reconstruction_error = torch.sum((reconstructed_A - A) ** 2)
+        reconstruction_error = torch.sum((reconstructed_A - cost_A) ** 2)
         regularization_term = 0.5 * Lambda * torch.sum(B ** 2)
 
         return reconstruction_error + regularization_term
