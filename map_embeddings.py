@@ -419,8 +419,13 @@ def main():
             # xw = xw.dot(wx2)
             # zw = zw.dot(wz2)
 
+            wx2, s, wz2_t = xp.linalg.svd(x[src_indices].T.dot(z[trg_indices]))
+            wz2 = wz2_t.T
+            xw = x.dot(wx2)
+            zw = z.dot(wz2)
+
             # GEOMM
-            xw, zw, wx2, wz2 = opt_geomm(x, z, xw, zw, src_indices, trg_indices, xp, args, dtype)
+            #xw, zw, wx2, wz2 = opt_geomm(x, z, xw, zw, src_indices, trg_indices, xp, args, dtype)
 
             # STEP 3: Re-weighting
             # xw *= s**args.src_reweight
@@ -569,36 +574,11 @@ def opt_geomm(x, z, xw, zw, src_indices, trg_indices, xp, args, dtype):
     print(f'Source indices length : {len(src_indices)},{len(trg_indices)}')
     start = time.time()
 
-    # 1. Find unique elements and their inverse indices in one step for both arrays.
-    # 'uniq_src' will be the unique elements sorted.
-    # 'src_map' will be an array the same size as src_indices, where each
-    # element is the new index of the corresponding item in uniq_src.
-    print(f'Before np.unique')
-    # np_uniq_src, np_src_map = xp.unique(src_indices, return_inverse=True)
-    # np_uniq_trg, np_trg_map = xp.unique(trg_indices, return_inverse=True)
-
-    # 2. Create the matrix A with the correct dimensions
-    # The dimensions are the number of unique source and target items.
-    # np_A = np.zeros((len(np_uniq_src), len(np_uniq_trg)))
-    ##np_A = np.zeros((len(src_indices), len(trg_indices)))
-
-    # 3. Populate the matrix using advanced (vectorized) indexing in a single operation.
-    # This is incredibly fast compared to a Python loop.
-    print(f'Before A construction')
-    ##np_A[np_src_map.get(), np_trg_map.get()] = 1
-    ##np_A[src_indices.get(), trg_indices.get()] = 1
-
     # Using original method of GEOMM.
     np_A, uniq_src, uniq_trg = get_geomm_like_A(src_indices.get(), trg_indices.get())
     xp_x_src = x[uniq_src]
     xp_z_trg = z[uniq_trg]
     print(f'Shapes, np_A:{np_A.shape}, xp_x_src:{xp_x_src.shape}, xp_z_trg:{xp_z_trg.shape}')
-
-    # Slice the source and target data
-    # xp_uniq_src = xp.asarray(np_uniq_src)
-    # xp_uniq_trg = xp.asarray(np_uniq_trg)
-    # xp_x_src = x[xp_uniq_src]
-    # xp_z_trg = z[xp_uniq_trg]
 
     Lambda = args.l2_reg
 
@@ -628,8 +608,6 @@ def opt_geomm(x, z, xw, zw, src_indices, trg_indices, xp, args, dtype):
         # Reconstruct the affinity matrix using the variables.
         # Note: Using '@' for matrix multiplication is cleaner
         reconstructed_A = (cost_x_src @ U1 @ B @ U2.T) @ cost_z_trg.T
-
-        #print(f'In cost, reconstructed_A: {reconstructed_A.shape}, A:{cost_A.shape}')
 
         # Calculate the two components of the cost.
         reconstruction_error = torch.sum((reconstructed_A - cost_A) ** 2)
