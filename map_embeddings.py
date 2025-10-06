@@ -419,13 +419,15 @@ def main():
             # xw = xw.dot(wx2)
             # zw = zw.dot(wz2)
 
-            wx2, s, wz2_t = xp.linalg.svd(x[src_indices].T.dot(z[trg_indices]))
-            wz2 = wz2_t.T
-            xw = x.dot(wx2)
-            zw = z.dot(wz2)
+            # on x-z
+            # wx2, s, wz2_t = xp.linalg.svd(x[src_indices].T.dot(z[trg_indices]))
+            # wz2 = wz2_t.T
+            # xw = x.dot(wx2)
+            # zw = z.dot(wz2)
 
             # GEOMM
-            #xw, zw, wx2, wz2 = opt_geomm(x, z, xw, zw, src_indices, trg_indices, xp, args, dtype)
+            # xw, zw, wx2, wz2 = opt_geomm(x, z, xw, zw, src_indices, trg_indices, xp, args, dtype)
+            xw, zw, wx2, wz2 = opt_geomm_fast(x, z, xw, zw, src_indices, trg_indices, xp, args, dtype)
 
             # STEP 3: Re-weighting
             # xw *= s**args.src_reweight
@@ -568,6 +570,18 @@ def get_geomm_like_A(src_indices, trg_indices):
 
     return A, uniq_src, uniq_trg
 
+def get_full_dic_geomm_like_A(src_indices, trg_indices):
+
+    x_count = len(src_indices)
+    z_count = len(trg_indices)
+    A = np.zeros((x_count, z_count))
+
+    # Creating dictionary matrix from training set
+    for i in range(len(src_indices)):
+        A[src_indices[i], trg_indices[i]] = 1
+
+    return A, src_indices, trg_indices
+
 
 def opt_geomm(x, z, xw, zw, src_indices, trg_indices, xp, args, dtype):
 
@@ -575,7 +589,8 @@ def opt_geomm(x, z, xw, zw, src_indices, trg_indices, xp, args, dtype):
     start = time.time()
 
     # Using original method of GEOMM.
-    np_A, uniq_src, uniq_trg = get_geomm_like_A(src_indices.get(), trg_indices.get())
+    #np_A, uniq_src, uniq_trg = get_geomm_like_A(src_indices.get(), trg_indices.get())
+    np_A, uniq_src, uniq_trg = get_full_dic_geomm_like_A(src_indices.get(), trg_indices.get())
     xp_x_src = x[uniq_src]
     xp_z_trg = z[uniq_trg]
     print(f'Shapes, np_A:{np_A.shape}, xp_x_src:{xp_x_src.shape}, xp_z_trg:{xp_z_trg.shape}')
@@ -644,6 +659,100 @@ def opt_geomm(x, z, xw, zw, src_indices, trg_indices, xp, args, dtype):
 
     return result_xw, result_zw, result_xw2, result_zw2
 
+def opt_geomm_fast(x, z, xw, zw, src_indices, trg_indices, xp, args, dtype):
+
+    print(f'Source indices length : {len(src_indices)},{len(trg_indices)}')
+    start = time.time()
+
+    # Using original method of GEOMM.
+    np_A, uniq_src, uniq_trg = get_geomm_like_A(src_indices.get(), trg_indices.get())
+    # np_A, uniq_src, uniq_trg = get_full_dic_geomm_like_A(src_indices.get(), trg_indices.get())
+    xp_x_src = x[uniq_src]
+    xp_z_trg = z[uniq_trg]
+    print(f'Shapes, np_A:{np_A.shape}, xp_x_src:{xp_x_src.shape}, xp_z_trg:{xp_z_trg.shape}')
+
+    Lambda = args.l2_reg
+
+    print("Pre-computing matrices XtX, ZtZ, and XtAZ...")
+    x_src_np = xp_x_src.get()  # Get NumPy array from CuPy
+    z_trg_np = xp_z_trg.get()  # Get NumPy array from CuPy
+
+    XtX = x_src_np.T @ x_src_np
+    ZtZ = z_trg_np.T @ z_trg_np
+    XtAZ = x_src_np.T @ np_A @ z_trg_np
+
+    print("Pre-computation finished.")
+
+    # 1. Define the manifold (this part remains very similar)
+    print(f'Before manifold definition')
+    manifold = Product([
+        Stiefel(x.shape[1], x.shape[1]),
+        Stiefel(z.shape[1], x.shape[1]),
+        SymmetricPositiveDefinite(x.shape[1])  # used to be PositiveDefinite
+    ])
+
+    # 2. Define the cost as a standard Python function
+    # The decorator tells pymanopt to use autograd to compute gradients automatically
+    # @pymanopt.function.autograd(manifold)
+    @pymanopt.function.pytorch(manifold)
+    def cost(U1, U2, B):
+        """
+        Defines the cost function using standard NumPy-like operations.
+        The variables U1, U2, and B will be passed by the solver.
+        """
+        U1 = U1.to(torch.float32)
+        U2 = U2.to(torch.float32)
+        B = B.to(torch.float32)
+
+        # 2. Move pre-computed matrices to the target torch device
+        sXtX = torch.from_numpy(XtX).to(B.device, dtype=torch.float32)
+        sZtZ = torch.from_numpy(ZtZ).to(B.device, dtype=torch.float32)
+        sXtAZ = torch.from_numpy(XtAZ).to(B.device, dtype=torch.float32)
+
+        # Combine U1, U2, B to form the transformation matrix W
+        W = (U1 @ B) @ U2.T
+
+        # Regularization term (same as before)
+        regularization_term = 0.5 * Lambda * torch.sum(B ** 2)
+
+        # First part of the cost: Tr(W^T * (X^T*X) * W * (Z^T*Z))
+        # This is the expanded reconstruction error term
+        trace_term = torch.trace((W.T @ sXtX @ W) @ sZtZ)
+
+        # Second part of the cost: -2 * sum(W * (X^T*A*Z))
+        # This is the expanded cross-term between reconstructed and original A
+        correlation_term = -2 * torch.sum(W * sXtAZ)
+
+        return regularization_term + trace_term + correlation_term
+
+    # 3. Instantiate the pymanopt problem
+    # We pass the manifold and the cost function directly
+    print(f'Before pymanopt.Problem')
+    problem = pymanopt.Problem(manifold=manifold, cost=cost)
+
+    # 4. Define and run the solver (this part is unchanged)
+    print(f'Before ConjugateGradient')
+    solver = ConjugateGradient(max_time=15000, max_iterations=150)  # max_iterations=args.max_opt_iter)
+    wopt = solver.run(problem)
+
+    # 5. Unpack the optimized weights
+    U1, U2, B = wopt.point
+
+    # Step 2: Transformation
+    sqrtm_B = xp.asarray(scipy.linalg.sqrtm(B), dtype=dtype)
+    U1 = xp.asarray(U1, dtype=dtype)
+    U2 = xp.asarray(U2, dtype=dtype)
+
+    result_xw2 = U1.dot(sqrtm_B)
+    result_zw2 = U2.dot(sqrtm_B)
+
+    result_xw = x.dot(U1).dot(sqrtm_B)
+    result_zw = z.dot(U2).dot(sqrtm_B)
+
+    end = time.time()
+    print(f"Geomm runtime: {end - start} seconds")
+
+    return result_xw, result_zw, result_xw2, result_zw2
 
 if __name__ == '__main__':
     main()
