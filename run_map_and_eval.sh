@@ -3,11 +3,11 @@
 # Use GPU 2
 export CUDA_VISIBLE_DEVICES=2
 
-source /home/shay/vecmapop/.venv/bin/activate
+source ~/python3-10/.venv/bin/activate
 
 log_file="--log_results_file /home/shay/vecmapop/results/eval_translation_results.txt"
 fixed_settings="--eval_translation --acl2018 --verbose --cuda"
-no_reweight_whiten="no_reweight --no_whiten"
+no_reweight_whiten="--no_reweight --no_whiten"
 
 en_de="/home/shay/vecmap/data/embeddings/en.emb.txt /home/shay/vecmap/data/embeddings/de.emb.txt aligned/aligned_en_en-de.emb.txt aligned/aligned_de_en-de.emb.txt --validation /home/shay/vecmap/data/dictionaries/en-de.test.txt"
 en_it="/home/shay/vecmap/data/embeddings/en.emb.txt /home/shay/vecmap/data/embeddings/it.emb.txt aligned/aligned_en_en-it.emb.txt aligned/aligned_it_en-it.emb.txt --validation /home/shay/vecmap/data/dictionaries/en-it.test.txt"
