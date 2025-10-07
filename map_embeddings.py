@@ -175,7 +175,7 @@ def main():
         args.trg_dewhiten = None
 
     main_start = time.time()
-    print(f'Current time : {time.strftime("%H:%M:%S")}')
+    print(f'\nCurrent time : {time.strftime("%H:%M:%S")}')
     print(f'args.whiten : {args.whiten}')
     print(f'args.src_dewhiten : {args.src_dewhiten}')
     print(f'args.trg_dewhiten : {args.trg_dewhiten}')
@@ -359,7 +359,7 @@ def main():
             zw[:] = z
         else:  # advanced mapping
 
-            print("\nRunning final transformation!!!")
+            print("\nRunning final transformation...")
             # TODO xw.dot(wx2, out=xw) and alike not working
             xw[:] = x
             zw[:] = z
