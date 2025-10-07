@@ -12,25 +12,30 @@
 #
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
-import scipy
+
 
 import embeddings
+import eval_translation
 from cupy_utils import *
 
 import argparse
 import collections
-import numpy as np
+
 import re
 import sys
 import time
+import os
+from datetime import datetime
+
+import scipy
+import numpy as np
+import pandas as pd
 
 import torch
 import pymanopt
 #import pymanopt.autograd.numpy as np
 from pymanopt.manifolds import Stiefel, SymmetricPositiveDefinite, Product
 from pymanopt.optimizers import ConjugateGradient
-
-#from cca_zoo.linear import CCA
 
 
 def dropout(m, p):
@@ -113,15 +118,20 @@ def main():
     mapping_group.add_argument('--trg_dewhiten', choices=['src', 'trg'], help='de-whiten the target language embeddings')
     mapping_group.add_argument('--dim_reduction', type=int, default=0, help='apply dimensionality reduction')
 
-    # GEOMM
+    # GEOMM enhancement args
     geomm_group = parser.add_argument_group('Additional for geomm','Additional for geomm')
     geomm_group.add_argument('-ns', '--new_space', action='store_true', help='if orthogonal constrained, mapping is to a new space')
+    geomm_group.add_argument('--geomm', action='store_true', help='run geomm in last iteration')
     geomm_group.add_argument('--l2_reg', type=float, default=1e2, help='Lambda for L2 Regularization')
-    geomm_group.add_argument('--max_opt_time', type=int,default=5000, help='Maximum time limit for optimization in seconds')
-    geomm_group.add_argument('--max_opt_iter', type=int,default=150, help='Maximum number of iterations for optimization')
+    geomm_group.add_argument('--max_opt_time', type=int, default=5000, help='Maximum time limit for optimization in seconds')
+    geomm_group.add_argument('--max_opt_iter', type=int, default=150, help='Maximum number of iterations for optimization')
     geomm_group.add_argument('--no_whiten', action='store_true', help='force no-whiten the embeddings')
     geomm_group.add_argument('--no_reweight', action='store_true', help='force no-reweight the embeddings')
-    #
+    geomm_group.add_argument('--full_iter_geomm', action='store_true', help='run geomm in iterations')
+    geomm_group.add_argument('--eval_translation', action='store_true', help='run eval translation at the end')
+    geomm_group.add_argument('--log_results_file', help='when eval translation log to the file')
+
+    # end of GEOMM enhancement args
 
     mapping_type = mapping_group.add_mutually_exclusive_group()
     mapping_type.add_argument('-c', '--orthogonal', action='store_true', help='use orthogonal constrained mapping')
@@ -165,6 +175,7 @@ def main():
         args.trg_dewhiten = None
 
     print(time.strftime("%H:%M:%S"))
+    main_start = time.time()
     print(f'args.whiten : {args.whiten}')
     print(f'args.src_dewhiten : {args.src_dewhiten}')
     print(f'args.trg_dewhiten : {args.trg_dewhiten}')
@@ -327,68 +338,18 @@ def main():
 
         # Update the embedding mapping
         if args.orthogonal or not end:  # orthogonal mapping
-            ### Orig
-            u, s, vt = xp.linalg.svd(z[trg_indices].T.dot(x[src_indices]))
-            w = vt.T.dot(u.T)
-            x.dot(w, out=xw)
-            zw[:] = z
 
-            ### A: double svd (with orig).
-            # if args.new_space:
-            #     u, s, vt = xp.linalg.svd(xw[src_indices].T.dot(z[trg_indices]))
-            #     w = vt.T.dot(u.T)
-            #     z.dot(w, out=zw)
-
-            ### B: random
-            # num_columns = xw.shape[1]
-            # ort1 = Orthogonal(num_columns, num_columns)
-            # ort1 = xp.asarray(ort1)
-            # zw = zw.dot(ort1)
-            # xw = xw.dot(ort1)
-            #
-            # u, s, vt = xp.linalg.svd(zw[trg_indices].T.dot(xw[src_indices]))
-            # w = vt.T.dot(u.T)
-            # xw.dot(w, out=xw)
-            #
-            # u, s, vt = xp.linalg.svd(xw[src_indices].T.dot(zw[trg_indices]))
-            # w = vt.T.dot(u.T)
-            # zw.dot(w, out=zw)
-
-            ### C: Canonical Correlation Analysis (CCA)
-            # print(f'len(src_indices):{len(src_indices)}')
-
-            # np_xw = xw.get()
-            # np_zw = zw.get()
-            #
-            # lcca = CCA(latent_dimensions=min(xw.shape[1], len(src_indices)))
-            # lcca.fit([xw[src_indices].get(), zw[src_indices].get()])
-            #
-            # # Transform embeddings
-            # np_xw, np_zw = lcca.transform([xw[src_indices].get(), zw[src_indices].get()])
-            #
-            # Cx = xp.asarray(np_xw, dtype=dtype)
-            # Cy = xp.asarray(np_zw, dtype=dtype)
-            #
-            # # Step 1: Invert the matrix Cy
-            # Cy_inv = xp.linalg.pinv(Cy)
-            #
-            # del np_xw, np_zw, Cy
-            #
-            # # Step 2: Multiply Cx by the inverse of Cy
-            # result = Cx.dot(Cy_inv)
-            #
-            # u, s, vt = xp.linalg.svd(result)
-            # w = vt.T.dot(u.T)
-            # x.dot(w, out=xw)
-            # zw[:] = z
-            #
-            # del Cx, Cy_inv, result, u, s, vt
-
-            #geomm_like_A = get_geomm_like_A(src_indices.get(), trg_indices.get())
-            #print(geomm_like_A)
-
-            # GEOMM
-            #xw, zw, wx2, wz2 = opt_geomm(x, z, xw, zw, src_indices, trg_indices, xp, args, dtype)
+            if args.full_iter_geomm:
+                # GEOMM
+                #print(f"Running GEOMM in all iterations")
+                xw, zw, _, _ = opt_geomm_fast(x, z, xw, zw, src_indices, trg_indices, xp, args, dtype)
+            else:
+                # Vecmap
+                #print(f"Running SVD in all iterations")
+                u, s, vt = xp.linalg.svd(z[trg_indices].T.dot(x[src_indices]))
+                w = vt.T.dot(u.T)
+                x.dot(w, out=xw)
+                zw[:] = z
 
         elif args.unconstrained:  # unconstrained mapping
             print(f"Running unconstrained:{args.unconstrained}")
@@ -398,7 +359,7 @@ def main():
             zw[:] = z
         else:  # advanced mapping
 
-            print("Running else!!!")
+            print("Running final transformation!!!")
             # TODO xw.dot(wx2, out=xw) and alike not working
             xw[:] = x
             zw[:] = z
@@ -415,18 +376,24 @@ def main():
                 zw = zw.dot(wz1)
 
             # STEP 2: Orthogonal mapping
-            wx2, s, wz2_t = xp.linalg.svd(xw[src_indices].T.dot(zw[trg_indices]))
-            wz2 = wz2_t.T
-            xw = xw.dot(wx2)
-            zw = zw.dot(wz2)
+            if args.geomm:
+                # GEOMM
+                print(f"Running GEOMM. GEOMM:{args.geomm}")
+                xw, zw, wx2, wz2 = opt_geomm_fast(x, z, xw, zw, src_indices, trg_indices, xp, args, dtype)
 
-            # GEOMM
-            # xw, zw, wx2, wz2 = opt_geomm(x, z, xw, zw, src_indices, trg_indices, xp, args, dtype)
-            # xw, zw, wx2, wz2 = opt_geomm_fast(x, z, xw, zw, src_indices, trg_indices, xp, args, dtype)
+                if args.whiten or (not args.no_reweight):
+                    # Calc s and wx2, wz2_t.
+                    print(f"Calculating s and wx2, wz2_t for whiten or reweight")
+                    wx2, s, wz2_t = xp.linalg.svd(xw[src_indices].T.dot(zw[trg_indices]))
+                    wz2 = wz2_t.T
+            else:
+                # Vecmap
+                print(f"Running Vecmap. GEOMM:{args.geomm}")
+                wx2, s, wz2_t = xp.linalg.svd(xw[src_indices].T.dot(zw[trg_indices]))
+                wz2 = wz2_t.T
+                xw = xw.dot(wx2)
+                zw = zw.dot(wz2)
 
-            # Calc s and wx2, wz2_t.
-            # wx2, s, wz2_t = xp.linalg.svd(xw[src_indices].T.dot(zw[trg_indices]))
-            # wz2 = wz2_t.T
 
             # STEP 3: Re-weighting
             if not args.no_reweight:
@@ -542,6 +509,119 @@ def main():
     srcfile.close()
     trgfile.close()
 
+    main_end = time.time()
+
+    if args.eval_translation:
+        print(f'Running eval translation...')
+        translation_start = time.time()
+
+        retrieval_value = 'csls'
+
+        # Define the arguments as a list of strings
+        eval_args = [
+            args.src_output,
+            args.trg_output,
+            '-d', args.validation,
+            '--retrieval', retrieval_value,
+            '--cuda',
+        ]
+
+        print("\nCalling the evaluation script...")
+        eval_result = eval_translation.main(eval_args)
+        print(f"Evaluation script returned: {eval_result}")
+        translation_end = time.time()
+
+        if args.log_results_file:
+
+            if args.acl2018:
+                recommended_type_value = 'acl2018'
+            elif args.unsupervised:
+                recommended_type_value = 'unsupervised'
+            else:
+                recommended_type_value = None
+
+            run_settings = {
+                'source': os.path.basename(args.src_input),
+                'target': os.path.basename(args.trg_input),
+                'dictionary': os.path.basename(args.validation),
+                'type': recommended_type_value,
+                'seed': args.seed,
+                'geomm': args.geomm,
+                'no_whiten': args.no_whiten,
+                'no_reweight': args.no_reweight,
+                'full_iter_geomm': args.full_iter_geomm,
+                'l2_reg': args.l2_reg,
+                'max_opt_time': args.max_opt_time,
+                'max_opt_iter': args.max_opt_iter,
+                'eval_retrieval': retrieval_value
+            }
+
+            eval_result['iterations'] = it
+            eval_result['translation_seconds'] = translation_end -translation_start
+            eval_result['transformation_seconds'] = main_end - main_start
+            eval_result['coverage_%'] = f"{eval_result['coverage']:7.2%}"
+            eval_result['accuracy_%'] = f"{eval_result['accuracy']:7.2%}"
+            log_evaluation_results(log_file=args.log_results_file, settings=run_settings, results=eval_result)
+
+
+def log_evaluation_results(log_file, settings, results):
+    """
+    Logs experiment settings and results to a CSV file.
+
+    If a row with the same settings already exists, it's overwritten
+    with new results and a new timestamp. Otherwise, a new row is appended.
+
+    Args:
+        log_file (str): Path to the CSV log file.
+        settings (dict): Dictionary of settings that identify the run (e.g., l2_reg).
+        results (dict): Dictionary of results to log (e.g., accuracy).
+    """
+    # 1. Prepare the new row data
+    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    new_row_data = {**settings, **results, 'timestamp': timestamp}
+
+    # 2. Read the existing log file or create a new DataFrame
+    if os.path.exists(log_file):
+        df = pd.read_csv(log_file)
+    else:
+        # Create an empty DataFrame with the correct columns if file doesn't exist
+        df = pd.DataFrame(columns=list(new_row_data.keys()))
+
+    # 3. Find if a row with these exact settings already exists
+    mask = pd.Series([True] * len(df))
+    for key, value in settings.items():
+        # Handle cases where the column might not exist yet
+        if key in df.columns:
+            mask &= (df[key] == value)
+        else:
+            mask = pd.Series([False] * len(df))  # No match if column is missing
+            break
+
+    matching_indices = df[mask].index
+
+    # 4. Overwrite or Append
+    if not matching_indices.empty:
+        # A. Match found: Overwrite the first matching row
+        index_to_update = matching_indices[0]
+        for key, value in new_row_data.items():
+            df.loc[index_to_update, key] = value
+        print(f"Log file updated for settings: {settings}")
+    else:
+        # A. Create a DataFrame for the new row
+        new_row_df = pd.DataFrame([new_row_data])
+
+        # B. Check if the original DataFrame is empty
+        if df.empty:
+            # If so, the new DataFrame is just the new row
+            df = new_row_df
+        else:
+            # Otherwise, concatenate as before
+            df = pd.concat([df, new_row_df], ignore_index=True)
+        # --- END OF FIX ---
+        print(f"New entry added to log for settings: {settings}")
+
+    # 5. Save the updated DataFrame back to CSV
+    df.to_csv(log_file, index=False)
 
 def get_geomm_like_A(src_indices, trg_indices):
 

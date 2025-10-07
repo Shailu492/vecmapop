@@ -43,7 +43,7 @@ def topk_mean(m, k, inplace=False):  # TODO Assuming that axis is 1
     return ans / k
 
 
-def main():
+def main(args_list=None):
     # Parse command line arguments
     parser = argparse.ArgumentParser(description='Evaluate embeddings of two languages in a shared space in word translation induction')
     parser.add_argument('src_embeddings', help='the source language embeddings')
@@ -58,7 +58,10 @@ def main():
     parser.add_argument('--seed', type=int, default=0, help='the random seed')
     parser.add_argument('--precision', choices=['fp16', 'fp32', 'fp64'], default='fp32', help='the floating-point precision (defaults to fp32)')
     parser.add_argument('--cuda', action='store_true', help='use cuda (requires cupy)')
-    args = parser.parse_args()
+
+    # If args_list is None, parse from command line (sys.argv)
+    # Otherwise, parse from the provided list
+    args = parser.parse_args(args_list)
 
     # Choose the right dtype for the desired precision
     if args.precision == 'fp16':
@@ -169,6 +172,11 @@ def main():
     # Compute accuracy
     accuracy = np.mean([1 if translation[i] in src2trg[i] else 0 for i in src])
     print('Coverage:{0:7.2%}  Accuracy:{1:7.2%}'.format(coverage, accuracy))
+
+    return {
+        'coverage': coverage,
+        'accuracy': accuracy
+    }
 
 
 if __name__ == '__main__':
