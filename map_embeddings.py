@@ -174,8 +174,8 @@ def main():
         args.src_dewhiten = None
         args.trg_dewhiten = None
 
-    print(time.strftime("%H:%M:%S"))
     main_start = time.time()
+    print(f'Current time : {time.strftime("%H:%M:%S")}')
     print(f'args.whiten : {args.whiten}')
     print(f'args.src_dewhiten : {args.src_dewhiten}')
     print(f'args.trg_dewhiten : {args.trg_dewhiten}')
@@ -359,7 +359,7 @@ def main():
             zw[:] = z
         else:  # advanced mapping
 
-            print("Running final transformation!!!")
+            print("\nRunning final transformation!!!")
             # TODO xw.dot(wx2, out=xw) and alike not working
             xw[:] = x
             zw[:] = z
@@ -501,7 +501,7 @@ def main():
         it += 1
 
     # Write mapped embeddings
-    print(f'Writing embeddings...')
+    print(f'\nWriting embeddings...')
     srcfile = open(args.src_output, mode='w', encoding=args.encoding, errors='surrogateescape')
     trgfile = open(args.trg_output, mode='w', encoding=args.encoding, errors='surrogateescape')
     embeddings.write(src_words, xw, srcfile)
