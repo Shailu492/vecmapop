@@ -120,6 +120,7 @@ def main():
     geomm_group.add_argument('--max_opt_time', type=int,default=5000, help='Maximum time limit for optimization in seconds')
     geomm_group.add_argument('--max_opt_iter', type=int,default=150, help='Maximum number of iterations for optimization')
     geomm_group.add_argument('--no_whiten', action='store_true', help='force no-whiten the embeddings')
+    geomm_group.add_argument('--no_reweight', action='store_true', help='force no-reweight the embeddings')
     #
 
     mapping_type = mapping_group.add_mutually_exclusive_group()
@@ -414,24 +415,24 @@ def main():
                 zw = zw.dot(wz1)
 
             # STEP 2: Orthogonal mapping
-            # wx2, s, wz2_t = xp.linalg.svd(xw[src_indices].T.dot(zw[trg_indices]))
-            # wz2 = wz2_t.T
-            # xw = xw.dot(wx2)
-            # zw = zw.dot(wz2)
-
-            # on x-z
-            # wx2, s, wz2_t = xp.linalg.svd(x[src_indices].T.dot(z[trg_indices]))
-            # wz2 = wz2_t.T
-            # xw = x.dot(wx2)
-            # zw = z.dot(wz2)
+            wx2, s, wz2_t = xp.linalg.svd(xw[src_indices].T.dot(zw[trg_indices]))
+            wz2 = wz2_t.T
+            xw = xw.dot(wx2)
+            zw = zw.dot(wz2)
 
             # GEOMM
             # xw, zw, wx2, wz2 = opt_geomm(x, z, xw, zw, src_indices, trg_indices, xp, args, dtype)
-            xw, zw, wx2, wz2 = opt_geomm_fast(x, z, xw, zw, src_indices, trg_indices, xp, args, dtype)
+            # xw, zw, wx2, wz2 = opt_geomm_fast(x, z, xw, zw, src_indices, trg_indices, xp, args, dtype)
+
+            # Calc s and wx2, wz2_t.
+            # wx2, s, wz2_t = xp.linalg.svd(xw[src_indices].T.dot(zw[trg_indices]))
+            # wz2 = wz2_t.T
 
             # STEP 3: Re-weighting
-            # xw *= s**args.src_reweight
-            # zw *= s**args.trg_reweight
+            if not args.no_reweight:
+                print(f"Running reweight")
+                xw *= s**args.src_reweight
+                zw *= s**args.trg_reweight
 
             # STEP 4: De-whitening
             if args.src_dewhiten == 'src':
@@ -533,6 +534,7 @@ def main():
         it += 1
 
     # Write mapped embeddings
+    print(f'Writing embeddings...')
     srcfile = open(args.src_output, mode='w', encoding=args.encoding, errors='surrogateescape')
     trgfile = open(args.trg_output, mode='w', encoding=args.encoding, errors='surrogateescape')
     embeddings.write(src_words, xw, srcfile)
@@ -666,7 +668,6 @@ def opt_geomm_fast(x, z, xw, zw, src_indices, trg_indices, xp, args, dtype):
 
     # Using original method of GEOMM.
     np_A, uniq_src, uniq_trg = get_geomm_like_A(src_indices.get(), trg_indices.get())
-    # np_A, uniq_src, uniq_trg = get_full_dic_geomm_like_A(src_indices.get(), trg_indices.get())
     xp_x_src = x[uniq_src]
     xp_z_trg = z[uniq_trg]
     print(f'Shapes, np_A:{np_A.shape}, xp_x_src:{xp_x_src.shape}, xp_z_trg:{xp_z_trg.shape}')
