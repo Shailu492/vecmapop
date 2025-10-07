@@ -5,7 +5,7 @@ export CUDA_VISIBLE_DEVICES=2
 
 source ~/python3-10/.venv/bin/activate
 
-log_file="--log_results_file /home/shay/vecmapop/results/eval_translation_results.txt"
+log_file="--log_results_file /home/shay/vecmapop/results/eval_translation_results.csv"
 fixed_settings="--eval_translation --acl2018 --verbose --cuda"
 no_reweight_whiten="--no_reweight --no_whiten"
 
