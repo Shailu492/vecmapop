@@ -29,7 +29,6 @@ wiki_en_zh="${wiki_emb_dir}/wiki.en.vec ${wiki_emb_dir}/wiki.zh.vec ${wiki_out_d
 configs=(
     "${no_reweight_whiten} ${fixed_settings} ${log_file} ${wiki_en_de}"
     "${no_reweight_whiten} ${fixed_settings} ${log_file} ${wiki_en_ru}"
-    "--geomm ${no_reweight_whiten} ${fixed_settings} ${log_file} ${wiki_en_fr}"
     "--geomm ${no_reweight_whiten} ${fixed_settings} ${log_file} ${wiki_en_de}"
     "--geomm ${no_reweight_whiten} ${fixed_settings} ${log_file} ${wiki_en_ru}"
 )
