@@ -26,15 +26,8 @@ wiki_en_de="${wiki_emb_dir}/wiki.en.vec ${wiki_emb_dir}/wiki.de.vec ${wiki_out_d
 wiki_en_ru="${wiki_emb_dir}/wiki.en.vec ${wiki_emb_dir}/wiki.ru.vec ${wiki_out_dir}/aligned_en_en-ru.emb.txt ${wiki_out_dir}/aligned_ru_en-ru.emb.txt --translation_eval_dic ${wiki_dic_dir}/en-ru.5000-6500.txt"
 wiki_en_zh="${wiki_emb_dir}/wiki.en.vec ${wiki_emb_dir}/wiki.zh.vec ${wiki_out_dir}/aligned_en_en-zh.emb.txt ${wiki_out_dir}/aligned_zh_en-zh.emb.txt --translation_eval_dic ${wiki_dic_dir}/en-zh.5000-6500.txt"
 
+
 configs=(
-    "${no_reweight_whiten} ${fixed_settings} ${log_file} ${wiki_en_de}"
-    "${no_reweight_whiten} ${fixed_settings} ${log_file} ${wiki_en_ru}"
-    "--geomm ${no_reweight_whiten} ${fixed_settings} ${log_file} ${wiki_en_de}"
-    "--geomm ${no_reweight_whiten} ${fixed_settings} ${log_file} ${wiki_en_ru}"
-)
-
-
-configs3=(
     "${no_reweight_whiten} ${fixed_settings} ${log_file} ${wiki_en_es}"
     "${no_reweight_whiten} ${fixed_settings} ${log_file} ${wiki_en_fr}"
     "${no_reweight_whiten} ${fixed_settings} ${log_file} ${wiki_en_de}"
@@ -45,16 +38,10 @@ configs3=(
     "--geomm ${no_reweight_whiten} ${fixed_settings} ${log_file} ${wiki_en_de}"
     "--geomm ${no_reweight_whiten} ${fixed_settings} ${log_file} ${wiki_en_ru}"
     "--geomm ${no_reweight_whiten} ${fixed_settings} ${log_file} ${wiki_en_zh}"
-)
-
-configs2=(
     "--geomm ${longer_opt} ${no_reweight_whiten} ${fixed_settings} ${log_file} ${en_de}"
     "--geomm ${longer_opt} ${no_reweight_whiten} ${fixed_settings} ${log_file} ${en_it}"
     "--geomm ${longer_opt} ${no_reweight_whiten} ${fixed_settings} ${log_file} ${en_es}"
     "--geomm ${longer_opt} ${no_reweight_whiten} ${fixed_settings} ${log_file} ${en_fi}"
-)
-
-configs1=(
     "${no_reweight_whiten} ${fixed_settings} ${log_file} ${en_de}"
     "${no_reweight_whiten} ${fixed_settings} ${log_file} ${en_it}"
     "${no_reweight_whiten} ${fixed_settings} ${log_file} ${en_es}"
