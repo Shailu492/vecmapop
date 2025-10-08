@@ -502,8 +502,6 @@ def main():
         t = time.time()
         it += 1
 
-    # freeing memory
-    del x, z
 
     # Write mapped embeddings
     print(f'\nWriting embeddings...')
@@ -514,9 +512,14 @@ def main():
     srcfile.close()
     trgfile.close()
 
-    # freeing memory
+    # Freeing memory.
     print(f'Freeing memory...')
+    del x, z
     del xw, zw
+    del src_size, trg_size, simfwd
+    del best_sim_forward, src_indices_forward, trg_indices_forward, best_sim_backward, src_indices_backward, trg_indices_backward, knn_sim_fwd, knn_sim_bwd
+    if args.validation is not None:
+        del simval
     gc.collect()  # Force Python garbage collection
     cp.get_default_memory_pool().free_all_blocks()  # Free GPU memory
     cp.get_default_pinned_memory_pool().free_all_blocks()  # Free pinned memory
