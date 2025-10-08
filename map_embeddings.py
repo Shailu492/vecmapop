@@ -132,7 +132,7 @@ def main():
     geomm_group.add_argument('--full_iter_geomm', action='store_true', help='run geomm in iterations')
     geomm_group.add_argument('--eval_translation', action='store_true', help='run eval translation at the end')
     geomm_group.add_argument('--log_results_file', help='when eval translation log to the file')
-
+    geomm_group.add_argument('--translation_eval_dic', default=None, metavar='DICTIONARY', help='a dictionary for evaluation')
     # end of GEOMM enhancement args
 
     mapping_type = mapping_group.add_mutually_exclusive_group()
@@ -536,11 +536,15 @@ def main():
 
         retrieval_value = 'csls'
 
+        eval_dic = args.translation_eval_dic
+        if eval_dic is None:
+            eval_dic = args.validation
+
         # Define the arguments as a list of strings
         eval_args = [
             args.src_output,
             args.trg_output,
-            '-d', args.validation,
+            '-d', eval_dic,
             '--retrieval', retrieval_value,
             '--cuda',
         ]
@@ -562,7 +566,7 @@ def main():
             run_settings = {
                 'source': os.path.basename(args.src_input),
                 'target': os.path.basename(args.trg_input),
-                'dictionary': os.path.basename(args.validation),
+                'dictionary': os.path.basename(eval_dic),
                 'type': recommended_type_value,
                 'seed': args.seed,
                 'geomm': args.geomm,

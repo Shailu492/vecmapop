@@ -20,13 +20,23 @@ wiki_emb_dir="/home/shay/py_geomm/muse_data/vectors"
 wiki_dic_dir="/home/shay/py_geomm/muse_data/crosslingual/dictionaries"
 wiki_out_dir="/home/shay/vecmapop/aligned/wiki"
 
-wiki_en_es="${wiki_emb_dir}/wiki.en.vec ${wiki_emb_dir}/wiki.es.vec ${wiki_out_dir}/aligned_en_en-es.emb.txt ${wiki_out_dir}/aligned_es_en-es.emb.txt --validation ${wiki_dic_dir}/en-es.5000-6500.txt"
-wiki_en_fr="${wiki_emb_dir}/wiki.en.vec ${wiki_emb_dir}/wiki.fr.vec ${wiki_out_dir}/aligned_en_en-fr.emb.txt ${wiki_out_dir}/aligned_fr_en-fr.emb.txt --validation ${wiki_dic_dir}/en-fr.5000-6500.txt"
-wiki_en_de="${wiki_emb_dir}/wiki.en.vec ${wiki_emb_dir}/wiki.de.vec ${wiki_out_dir}/aligned_en_en-de.emb.txt ${wiki_out_dir}/aligned_de_en-de.emb.txt --validation ${wiki_dic_dir}/en-de.5000-6500.txt"
-wiki_en_ru="${wiki_emb_dir}/wiki.en.vec ${wiki_emb_dir}/wiki.ru.vec ${wiki_out_dir}/aligned_en_en-ru.emb.txt ${wiki_out_dir}/aligned_ru_en-ru.emb.txt --validation ${wiki_dic_dir}/en-ru.5000-6500.txt"
-wiki_en_zh="${wiki_emb_dir}/wiki.en.vec ${wiki_emb_dir}/wiki.zh.vec ${wiki_out_dir}/aligned_en_en-zh.emb.txt ${wiki_out_dir}/aligned_zh_en-zh.emb.txt --validation ${wiki_dic_dir}/en-zh.5000-6500.txt"
+wiki_en_es="${wiki_emb_dir}/wiki.en.vec ${wiki_emb_dir}/wiki.es.vec ${wiki_out_dir}/aligned_en_en-es.emb.txt ${wiki_out_dir}/aligned_es_en-es.emb.txt --translation_eval_dic ${wiki_dic_dir}/en-es.5000-6500.txt"
+wiki_en_fr="${wiki_emb_dir}/wiki.en.vec ${wiki_emb_dir}/wiki.fr.vec ${wiki_out_dir}/aligned_en_en-fr.emb.txt ${wiki_out_dir}/aligned_fr_en-fr.emb.txt --translation_eval_dic ${wiki_dic_dir}/en-fr.5000-6500.txt"
+wiki_en_de="${wiki_emb_dir}/wiki.en.vec ${wiki_emb_dir}/wiki.de.vec ${wiki_out_dir}/aligned_en_en-de.emb.txt ${wiki_out_dir}/aligned_de_en-de.emb.txt --translation_eval_dic ${wiki_dic_dir}/en-de.5000-6500.txt"
+wiki_en_ru="${wiki_emb_dir}/wiki.en.vec ${wiki_emb_dir}/wiki.ru.vec ${wiki_out_dir}/aligned_en_en-ru.emb.txt ${wiki_out_dir}/aligned_ru_en-ru.emb.txt --translation_eval_dic ${wiki_dic_dir}/en-ru.5000-6500.txt"
+wiki_en_zh="${wiki_emb_dir}/wiki.en.vec ${wiki_emb_dir}/wiki.zh.vec ${wiki_out_dir}/aligned_en_en-zh.emb.txt ${wiki_out_dir}/aligned_zh_en-zh.emb.txt --translation_eval_dic ${wiki_dic_dir}/en-zh.5000-6500.txt"
 
 configs=(
+    "${no_reweight_whiten} ${fixed_settings} ${log_file} ${wiki_en_es}"
+    "${no_reweight_whiten} ${fixed_settings} ${log_file} ${wiki_en_fr}"
+    "${no_reweight_whiten} ${fixed_settings} ${log_file} ${wiki_en_de}"
+    "${no_reweight_whiten} ${fixed_settings} ${log_file} ${wiki_en_ru}"
+    "--geomm ${no_reweight_whiten} ${fixed_settings} ${log_file} ${wiki_en_fr}"
+    "--geomm ${no_reweight_whiten} ${fixed_settings} ${log_file} ${wiki_en_de}"
+    "--geomm ${no_reweight_whiten} ${fixed_settings} ${log_file} ${wiki_en_ru}"
+)
+
+configs3=(
     "${no_reweight_whiten} ${fixed_settings} ${log_file} ${wiki_en_es}"
     "${no_reweight_whiten} ${fixed_settings} ${log_file} ${wiki_en_fr}"
     "${no_reweight_whiten} ${fixed_settings} ${log_file} ${wiki_en_de}"
@@ -83,7 +93,6 @@ for i in "${!configs[@]}"; do
         FAILED_CONFIGS+=("$((i+1))")
     fi
 
-    echo ""
 done
 
 echo "========================================"
