@@ -33,6 +33,7 @@ configs=(
     "--geomm ${no_reweight_whiten} ${fixed_settings} ${log_file} ${wiki_en_ru}"
 )
 
+
 configs3=(
     "${no_reweight_whiten} ${fixed_settings} ${log_file} ${wiki_en_es}"
     "${no_reweight_whiten} ${fixed_settings} ${log_file} ${wiki_en_fr}"
