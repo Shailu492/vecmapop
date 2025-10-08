@@ -17,6 +17,7 @@
 import embeddings
 import eval_translation
 from cupy_utils import *
+import cupy as cp
 
 import argparse
 import collections
@@ -26,6 +27,7 @@ import sys
 import time
 import os
 from datetime import datetime
+import gc
 
 import scipy
 import numpy as np
@@ -500,6 +502,9 @@ def main():
         t = time.time()
         it += 1
 
+    # freeing memory
+    del x, z
+
     # Write mapped embeddings
     print(f'\nWriting embeddings...')
     srcfile = open(args.src_output, mode='w', encoding=args.encoding, errors='surrogateescape')
@@ -508,6 +513,17 @@ def main():
     embeddings.write(trg_words, zw, trgfile)
     srcfile.close()
     trgfile.close()
+
+    # freeing memory
+    print(f'Freeing memory...')
+    del xw, zw
+    gc.collect()  # Force Python garbage collection
+    cp.get_default_memory_pool().free_all_blocks()  # Free GPU memory
+    cp.get_default_pinned_memory_pool().free_all_blocks()  # Free pinned memory
+    torch.cuda.empty_cache()
+    # Check memory freed.
+    mempool = cp.get_default_memory_pool()
+    print(f"GPU memory used: {mempool.used_bytes() / 1e9:.2f} GB")
 
     main_end = time.time()
 
@@ -832,6 +848,9 @@ def opt_geomm_fast(x, z, xw, zw, src_indices, trg_indices, xp, args, dtype):
 
     end = time.time()
     print(f"Geomm runtime: {end - start} seconds")
+
+    # freeing memory
+    del sqrtm_B, B, U1, U2, XtX, ZtZ, XtAZ
 
     return result_xw, result_zw, result_xw2, result_zw2
 
